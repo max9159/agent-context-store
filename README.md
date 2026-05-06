@@ -60,6 +60,7 @@ This repository currently provides a CLI-first. (MCP Server support is planned f
 
 | Command              | What it does                                                                                            | Example                                                      |
 | -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `acs --version`      | Prints the installed CLI version.                                                                       | `acs --version`                                              |
 | `acs init`           | Initializes the context store layout, schemas, templates, and audit files.                              | `acs init`                                                   |
 | `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. | `acs install-skills --agent cursor`                          |
 | `acs new`            | Creates a new SDLC artifact such as requirements, design, ADR, API notes, or test plan.                 | `acs new srs --task TASK-123 --title "Feature requirements"` |
@@ -149,6 +150,7 @@ acs package --task TASK-123 --role qa
 ## Command Reference
 
 ```bash
+acs --version
 acs init [path]
 acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
 acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]

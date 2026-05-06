@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -20,6 +21,9 @@ interface ParsedArgs {
 }
 
 const artifactTypes = new Set(["srs", "sdd", "adr", "api", "test"]);
+
+const require = createRequire(import.meta.url);
+const cliPackage = require("../package.json") as { version?: string };
 
 type AgentName = "cursor" | "claude" | "codex" | "openclaw" | "all";
 
@@ -57,7 +61,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "--version" || command === "-v") {
-    console.log("acs 0.1.0");
+    console.log(`acs ${cliPackage.version ?? "0.0.0"}`);
     return;
   }
 
@@ -320,6 +324,7 @@ function printHelp(): void {
   console.log(`Agent Context Store Toolkit
 
 Usage:
+  acs --version
   acs init [path]
   acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
   acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]
@@ -331,6 +336,7 @@ Usage:
   acs doctor
 
 Examples:
+  acs --version
   acs init
   acs install-skills --agent cursor
   acs install-skills --agent claude
