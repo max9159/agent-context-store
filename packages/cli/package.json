@@ -9,6 +9,10 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "agent-config"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },

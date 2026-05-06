@@ -25,11 +25,17 @@ pnpm smoke
 ```text
 packages/
   cli/       # acs command-line entrypoint
+    agent-config/   # bundled agent skill templates (included in npm package)
+      AGENTS.md
+      CLAUDE.md
+      skills/agent-context-store/SKILL.md  # shared skill, one copy for all agents
   core/      # context store creation, validation, handoff, packaging logic
 schemas/    # JSON schemas copied into initialized context stores
 templates/  # Markdown templates copied into initialized context stores
 examples/   # usage examples
 ```
+
+The `agent-config/` directory is listed in `packages/cli/package.json` under `files` so it is included in every npm publish. The installer uses an upward path search from the compiled `dist/index.js` to locate it at runtime, which works both in the local source tree and after a global npm install.
 
 ## Local CLI Usage
 
