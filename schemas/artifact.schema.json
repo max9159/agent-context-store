@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-context-store.dev/schemas/artifact.schema.json",
+  "title": "Agent Context Store Artifact Metadata",
+  "type": "object",
+  "required": [
+    "id",
+    "type",
+    "title",
+    "owner",
+    "status",
+    "version",
+    "approval_status",
+    "last_updated",
+    "source_refs"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "type": {
+      "type": "string",
+      "enum": ["srs", "sdd", "adr", "api", "test"]
+    },
+    "title": { "type": "string" },
+    "owner": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "ready_for_review", "changes_requested", "approved", "deprecated", "superseded"]
+    },
+    "version": { "type": "string" },
+    "approval_status": {
+      "type": "string",
+      "enum": ["pending", "approved", "changes_requested", "deprecated", "superseded"]
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date"
+    },
+    "source_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "outputs": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-context-store.dev/schemas/approval.schema.json",
+  "title": "Agent Context Store Approval State",
+  "type": "object",
+  "required": ["status", "approval_status"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["draft", "ready_for_review", "changes_requested", "approved", "deprecated", "superseded"]
+    },
+    "approval_status": {
+      "type": "string",
+      "enum": ["pending", "approved", "changes_requested", "deprecated", "superseded"]
+    },
+    "reviewer": { "type": "string" },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": true
+}

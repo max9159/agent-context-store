@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-context-store.dev/schemas/context-package.schema.json",
+  "title": "Agent Context Store Role Context Package",
+  "type": "object",
+  "required": [
+    "task_id",
+    "role",
+    "generated_at",
+    "included_artifacts",
+    "included_handoffs"
+  ],
+  "properties": {
+    "task_id": { "type": "string" },
+    "role": { "type": "string" },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "included_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "type"],
+        "properties": {
+          "path": { "type": "string" },
+          "type": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      }
+    },
+    "included_handoffs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "excluded_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

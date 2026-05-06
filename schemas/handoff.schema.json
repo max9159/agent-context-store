@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-context-store.dev/schemas/handoff.schema.json",
+  "title": "Agent Context Store Handoff Package",
+  "type": "object",
+  "required": [
+    "id",
+    "task_id",
+    "from_role",
+    "to_role",
+    "handoff_type",
+    "status",
+    "approval_status",
+    "artifacts",
+    "context_summary",
+    "open_questions",
+    "readiness"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "from_role": { "type": "string" },
+    "to_role": { "type": "string" },
+    "handoff_type": { "type": "string" },
+    "status": { "type": "string" },
+    "approval_status": { "type": "string" },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "type", "version"],
+            "properties": {
+              "path": { "type": "string" },
+              "type": { "type": "string" },
+              "version": { "type": "string" },
+              "summary": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "context_summary": { "type": "string" },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "readiness": {
+      "type": "object",
+      "required": ["dor_status", "blocking_questions"],
+      "properties": {
+        "dor_status": { "type": "string" },
+        "blocking_questions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

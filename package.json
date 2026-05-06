@@ -1,0 +1,28 @@
+{
+  "name": "agent-context-store",
+  "version": "0.1.0",
+  "description": "Agent Context Store Toolkit: Git-backed, schema-validated artifact handoff for AI agents.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "check": "pnpm build",
+    "smoke": "node packages/cli/dist/index.js --help"
+  },
+  "keywords": [
+    "ai-agent",
+    "context",
+    "handoff",
+    "sdlc",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  }
+}

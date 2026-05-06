@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-context-store.dev/schemas/context-summary.schema.json",
+  "title": "Agent Context Store Context Summary",
+  "type": "object",
+  "required": [
+    "business_goal",
+    "current_scope",
+    "out_of_scope",
+    "key_decisions",
+    "constraints",
+    "risks",
+    "next_role_focus"
+  ],
+  "properties": {
+    "business_goal": { "type": "string" },
+    "current_scope": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "key_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "uri"],
+        "properties": {
+          "id": { "type": "string" },
+          "summary": { "type": "string" },
+          "uri": { "type": "string" }
+        }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "next_role_focus": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}
