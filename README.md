@@ -9,22 +9,13 @@ It helps Cursor, Claude Code, OpenClaw, Codex, CI pipelines, and custom agent ru
 - Git
 - A Git repository or folder to use as the context store
 
-## Install
+## Step 1: Install the CLI
 ```bash
-npm install -g @agent-context-store/cli
+npm install -g agent-context-store
 acs --help
 ```
-<!-- 
-The npm install command is the same for every agent runtime. Cursor, Claude Code, OpenClaw, Codex, and CI only need `acs` to be available in the shell where they run.
 
-If you do not want a global install, use `npx`:
-
-```bash
-npx @agent-context-store/cli --help
-npx @agent-context-store/cli init
-``` -->
-
-## Configure Agents
+## Step 2: Configure Agents
 
 ### Option 1: Install into the user's folder
 Giving each agent the right instruction or skill file so it knows when to call `acs`.
@@ -54,25 +45,8 @@ If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends the starter 
 acs install-skills --agent all --path /path/to/repo
 ```
 
-## Commands
 
-This repository currently provides a CLI-first. (MCP Server support is planned for a later phase.)
-
-| Command              | What it does                                                                                            | Example                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `acs --version`      | Prints the installed CLI version.                                                                       | `acs --version`                                              |
-| `acs init`           | Initializes the context store layout, schemas, templates, and audit files.                              | `acs init`                                                   |
-| `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. | `acs install-skills --agent cursor`                          |
-| `acs new`            | Creates a new SDLC artifact such as requirements, design, ADR, API notes, or test plan.                 | `acs new srs --task TASK-123 --title "Feature requirements"` |
-| `acs validate`       | Validates the context store structure, artifact metadata, schemas, and handoff records.                 | `acs validate`                                               |
-| `acs handoff create` | Creates a role-to-role handoff record for a task.                                                       | `acs handoff create --from sa --to dev --task TASK-123`      |
-| `acs handoff check`  | Validates a specific handoff before another agent relies on it.                                         | `acs handoff check HOFF-TASK-123-SA-DEV`                     |
-| `acs package`        | Builds a role-specific context package for the next agent or automation step.                           | `acs package --task TASK-123 --role dev`                     |
-| `acs index`          | Rebuilds `.context-store/index.json` from artifacts and handoffs.                                       | `acs index`                                                  |
-| `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              | `acs doctor`                                                 |
-
-
-## Context Store Repository
+## Step 3: Create a Context Store Repository
 
 Create a dedicated context store repository for your team.
 
@@ -85,7 +59,7 @@ Use a dedicated store repository when:
 
 Run `acs init` at the dedicated store repository root and commit the generated `artifacts/`, `handoffs/`, `packages/`, `schemas/`, `templates/`, `docs/`, and `.context-store/` files.
 
-## Quickstart
+### Create a Context Store Repository
 
 Create and initialize a context store:
 
@@ -147,31 +121,7 @@ acs handoff create --from dev --to qa --task TASK-123
 acs package --task TASK-123 --role qa
 ```
 
-## Command Reference
-
-```bash
-acs --version
-acs init [path]
-acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
-acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]
-acs validate
-acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>
-acs handoff check <HANDOFF_ID_OR_PATH>
-acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
-acs index
-acs doctor
-```
-
-Common roles:
-
-- `ba`
-- `sa`
-- `dev`
-- `developer`
-- `qa`
-- `reviewer`
-
-## Generated Context Store Layout
+## Context Store Layout
 
 ```text
 .context-store/
@@ -200,19 +150,49 @@ Important outputs:
 - `.context-store/index.json`: generated artifact and handoff index.
 - `.context-store/audit/`: local audit log for CLI-created changes.
 
-## Design Boundary
+## Commands
 
-Agent Context Store Toolkit makes handoffs explicit:
+This repository currently provides a CLI-first. (MCP Server support is planned for a later phase.)
 
-- durable artifacts
-- metadata
-- source references
-- approval state
-- readiness checks
-- role-specific context packages
+| Command              | What it does                                                                                            | Example                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `acs --version`      | Prints the installed CLI version.                                                                       | `acs --version`                                              |
+| `acs init`           | Initializes the context store layout, schemas, templates, and audit files.                              | `acs init`                                                   |
+| `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. | `acs install-skills --agent cursor`                          |
+| `acs new`            | Creates a new SDLC artifact such as requirements, design, ADR, API notes, or test plan.                 | `acs new srs --task TASK-123 --title "Feature requirements"` |
+| `acs validate`       | Validates the context store structure, artifact metadata, schemas, and handoff records.                 | `acs validate`                                               |
+| `acs handoff create` | Creates a role-to-role handoff record for a task.                                                       | `acs handoff create --from sa --to dev --task TASK-123`      |
+| `acs handoff check`  | Validates a specific handoff before another agent relies on it.                                         | `acs handoff check HOFF-TASK-123-SA-DEV`                     |
+| `acs package`        | Builds a role-specific context package for the next agent or automation step.                           | `acs package --task TASK-123 --role dev`                     |
+| `acs index`          | Rebuilds `.context-store/index.json` from artifacts and handoffs.                                       | `acs index`                                                  |
+| `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              | `acs doctor`                                                 |
 
-The actual documents stay in the user's chosen context repository.
+### Command Reference
+
+```bash
+acs --version
+acs init [path]
+acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
+acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]
+acs validate
+acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>
+acs handoff check <HANDOFF_ID_OR_PATH>
+acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
+acs index
+acs doctor
+```
+
+Common roles:
+
+- `ba`
+- `sa`
+- `dev`
+- `developer`
+- `qa`
+- `reviewer`
+
 
 ## Developing This Repository
 
 If you want to modify or test the toolkit itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
+

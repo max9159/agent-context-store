@@ -1,5 +1,5 @@
 {
-  "name": "@agent-context-store/cli",
+  "name": "agent-context-store",
   "version": "0.1.0",
   "description": "acs CLI for Agent Context Store Toolkit.",
   "type": "module",

@@ -5,7 +5,7 @@ This guide is for developers who want to modify or test Agent Context Store Tool
 Normal users do not need these steps. To use the published CLI, install it with npm:
 
 ```bash
-npm install -g @agent-context-store/cli
+npm install -g agent-context-store
 acs --help
 ```
 
