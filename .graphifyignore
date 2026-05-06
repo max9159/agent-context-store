@@ -1,0 +1,15 @@
+# Basic Ignore
+graphify-out/
+vendor/
+node_modules/
+dist/
+*.generated.py
+AGENTS.md
+CLAUDE.md
+
+# Project Specific Ignore
+.turbo/
+.DS_Store
+*.log
+*.tsbuildinfo
+tmp/

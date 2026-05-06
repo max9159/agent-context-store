@@ -1,0 +1,845 @@
+{
+  "nodes": [
+    {
+      "id": "review_smoke_sa_context_package",
+      "label": "SA Context Package",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_req_demo_0001_reference",
+      "label": "REQ-DEMO-0001 Requirement Artifact",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_handoff_ba_sa",
+      "label": "HOFF-DEMO-0001-BA-SA Handoff",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_adr_template",
+      "label": "ADR Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/templates/adr.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_api_design_template",
+      "label": "API Design Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/templates/api-design.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_sdd_template",
+      "label": "SDD Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/templates/sdd.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_srs_template",
+      "label": "SRS Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/templates/srs.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_test_plan_template",
+      "label": "Test Plan Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/templates/test-plan.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_adr_demo_0001",
+      "label": "Use Redis for OTP State",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/artifacts/adr/ADR-DEMO-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_api_demo_0001",
+      "label": "OTP Login API",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/artifacts/api/API-DEMO-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_sdd_demo_0001",
+      "label": "Login with OTP System Design",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/artifacts/design/SDD-DEMO-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_req_demo_0001",
+      "label": "Login with OTP",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/artifacts/requirements/REQ-DEMO-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_tc_demo_0001",
+      "label": "OTP Login Test Plan",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/artifacts/test/TC-DEMO-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_approval_state_rules",
+      "label": "Approval State Rules",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/approval-state-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_definition_of_done",
+      "label": "Definition of Done",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/definition-of-done.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_definition_of_ready",
+      "label": "Definition of Ready",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/definition-of-ready.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_source_reference_rules",
+      "label": "Source Reference Rules",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/source-reference-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_dev_context_package",
+      "label": "DEV Context Package",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_qa_context_package",
+      "label": "QA Context Package",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_sa_context_package",
+      "label": "SA Context Package",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_handoff_dev_qa",
+      "label": "HOFF-DEMO-0001-DEV-QA Handoff",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_handoff_sa_dev",
+      "label": "HOFF-DEMO-0001-SA-DEV Handoff",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_handoff_ba_sa",
+      "label": "HOFF-DEMO-0001-BA-SA Handoff",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_adr_template",
+      "label": "ADR Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/templates/adr.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_api_design_template",
+      "label": "API Design Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/templates/api-design.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_sdd_template",
+      "label": "SDD Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/templates/sdd.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_srs_template",
+      "label": "SRS Template",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/templates/srs.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_done_handoff_rationale",
+      "label": "Validated artifacts and handoff continuity rationale",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/definition-of-done.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_ready_traceability_rationale",
+      "label": "Ready work traceability rationale",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/definition-of-ready.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke2_prefer_durable_sources_rationale",
+      "label": "Durable source preference rationale",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke-2/docs/source-reference-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    }
+  ],
+  "edges": [
+    {
+      "source": "review_smoke_sa_context_package",
+      "target": "review_smoke_req_demo_0001_reference",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_sa_context_package",
+      "target": "review_smoke_handoff_ba_sa",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_dev_context_package",
+      "target": "review_smoke2_adr_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_dev_context_package",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_dev_context_package",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_dev_context_package",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_dev_context_package",
+      "target": "review_smoke2_handoff_dev_qa",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_dev_context_package",
+      "target": "review_smoke2_handoff_sa_dev",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_qa_context_package",
+      "target": "review_smoke2_adr_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_qa_context_package",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_qa_context_package",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_qa_context_package",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_qa_context_package",
+      "target": "review_smoke2_tc_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_qa_context_package",
+      "target": "review_smoke2_handoff_dev_qa",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sa_context_package",
+      "target": "review_smoke2_adr_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sa_context_package",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sa_context_package",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sa_context_package",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sa_context_package",
+      "target": "review_smoke2_handoff_ba_sa",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sa_context_package",
+      "target": "review_smoke2_handoff_sa_dev",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_done_handoff_rationale",
+      "target": "review_smoke2_definition_of_done",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_ready_traceability_rationale",
+      "target": "review_smoke2_definition_of_ready",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-ready.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_prefer_durable_sources_rationale",
+      "target": "review_smoke2_source_reference_rules",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-smoke-2/docs/source-reference-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_approval_state_rules",
+      "target": "review_smoke2_adr_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "tmp/review-smoke-2/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_approval_state_rules",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "tmp/review-smoke-2/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_approval_state_rules",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "tmp/review-smoke-2/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_approval_state_rules",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "tmp/review-smoke-2/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_approval_state_rules",
+      "target": "review_smoke2_tc_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "tmp/review-smoke-2/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_definition_of_ready",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-ready.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_definition_of_ready",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.78,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-ready.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_definition_of_done",
+      "target": "review_smoke2_dev_context_package",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.88,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_definition_of_done",
+      "target": "review_smoke2_qa_context_package",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.88,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_definition_of_done",
+      "target": "review_smoke2_sa_context_package",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.88,
+      "source_file": "tmp/review-smoke-2/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_source_reference_rules",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.83,
+      "source_file": "tmp/review-smoke-2/docs/source-reference-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_source_reference_rules",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.83,
+      "source_file": "tmp/review-smoke-2/docs/source-reference-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_req_demo_0001",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "tmp/review-smoke-2/artifacts/design/SDD-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_req_demo_0001",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.82,
+      "source_file": "tmp/review-smoke-2/artifacts/requirements/REQ-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_sdd_demo_0001",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.88,
+      "source_file": "tmp/review-smoke-2/artifacts/design/SDD-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_adr_demo_0001",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.86,
+      "source_file": "tmp/review-smoke-2/artifacts/adr/ADR-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_tc_demo_0001",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "tmp/review-smoke-2/artifacts/test/TC-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_tc_demo_0001",
+      "target": "review_smoke2_sdd_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.74,
+      "source_file": "tmp/review-smoke-2/artifacts/test/TC-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke2_adr_demo_0001",
+      "target": "review_smoke2_api_demo_0001",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.68,
+      "source_file": "tmp/review-smoke-2/artifacts/adr/ADR-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_adr_template",
+      "target": "review_smoke2_adr_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/templates/adr.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_api_design_template",
+      "target": "review_smoke2_api_design_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/templates/api-design.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_sdd_template",
+      "target": "review_smoke2_sdd_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/templates/sdd.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_srs_template",
+      "target": "review_smoke2_srs_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/templates/srs.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_sa_context_package",
+      "target": "review_smoke2_sa_context_package",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.91,
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_req_demo_0001_reference",
+      "target": "review_smoke2_req_demo_0001",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.94,
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_handoff_ba_sa",
+      "target": "review_smoke2_handoff_ba_sa",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.94,
+      "source_file": "tmp/review-smoke/packages/DEMO-0001.sa.context.md",
+      "source_location": null,
+      "weight": 1.0
+    }
+  ],
+  "hyperedges": [
+    {
+      "id": "otp_delivery_artifact_bundle",
+      "label": "OTP Delivery Artifact Bundle",
+      "nodes": [
+        "review_smoke2_adr_demo_0001",
+        "review_smoke2_api_demo_0001",
+        "review_smoke2_sdd_demo_0001",
+        "review_smoke2_req_demo_0001",
+        "review_smoke2_tc_demo_0001"
+      ],
+      "relation": "form",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "tmp/review-smoke-2/packages/DEMO-0001.qa.context.md"
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

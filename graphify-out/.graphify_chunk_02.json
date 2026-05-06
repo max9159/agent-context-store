@@ -1,0 +1,711 @@
+{
+  "nodes": [
+    {
+      "id": "final_smoke_srs_srs_template",
+      "label": "SRS Template",
+      "file_type": "document",
+      "source_file": "tmp/final-smoke/templates/srs.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "final_smoke_test_plan_test_plan_template",
+      "label": "Test Plan Template",
+      "file_type": "document",
+      "source_file": "tmp/final-smoke/templates/test-plan.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "adr_fix_0001_use_redis_for_otp",
+      "label": "Use Redis for OTP",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/artifacts/adr/ADR-FIX-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "api_fix_0001_otp_login_api",
+      "label": "OTP Login API",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/artifacts/api/API-FIX-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "sdd_fix_0001_login_with_otp_design",
+      "label": "Login with OTP Design",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/artifacts/design/SDD-FIX-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "req_fix_0001_login_with_otp",
+      "label": "Login with OTP",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/artifacts/requirements/REQ-FIX-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "tc_fix_0001_otp_login_test_plan",
+      "label": "OTP Login Test Plan",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/artifacts/test/TC-FIX-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_approval_state_rules",
+      "label": "Approval State Rules",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/approval-state-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_definition_of_done",
+      "label": "Definition of Done",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/definition-of-done.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_definition_of_ready",
+      "label": "Definition of Ready",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/definition-of-ready.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_source_reference_rules",
+      "label": "Source Reference Rules",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/source-reference-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "fix_0001_dev_context_package",
+      "label": "FIX-0001 Dev Context Package",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_adr_adr_template",
+      "label": "ADR Template",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/templates/adr.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_api_design_api_template",
+      "label": "API Design Template",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/templates/api-design.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_sdd_sdd_template",
+      "label": "SDD Template",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/templates/sdd.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_srs_srs_template",
+      "label": "SRS Template",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/templates/srs.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_test_plan_test_plan_template",
+      "label": "Test Plan Template",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/templates/test-plan.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "req_demo_0001_login_with_otp",
+      "label": "Login with OTP",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/artifacts/requirements/REQ-DEMO-0001.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_approval_state_rules",
+      "label": "Approval State Rules",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/docs/approval-state-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_definition_of_done",
+      "label": "Definition of Done",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/docs/definition-of-done.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_definition_of_ready",
+      "label": "Definition of Ready",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/docs/definition-of-ready.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_smoke_source_reference_rules",
+      "label": "Source Reference Rules",
+      "file_type": "document",
+      "source_file": "tmp/review-smoke/docs/source-reference-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "fix_0001_dev_role_exclusion_rationale",
+      "label": "Excluded Because Not Required for Dev Role",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_approval_state_valid_states",
+      "label": "Valid Approval States",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/approval-state-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_ready_artifact_readiness_criteria",
+      "label": "Artifact Readiness Criteria",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/definition-of-ready.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_done_completion_criteria",
+      "label": "Artifact Completion Criteria",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/definition-of-done.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "review_fix_source_preferred_evidence_sources",
+      "label": "Preferred Evidence Sources",
+      "file_type": "document",
+      "source_file": "tmp/review-fix/docs/source-reference-rules.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    }
+  ],
+  "edges": [
+    {
+      "source": "fix_0001_dev_context_package",
+      "target": "adr_fix_0001_use_redis_for_otp",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "fix_0001_dev_context_package",
+      "target": "api_fix_0001_otp_login_api",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "fix_0001_dev_context_package",
+      "target": "sdd_fix_0001_login_with_otp_design",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "fix_0001_dev_context_package",
+      "target": "req_fix_0001_login_with_otp",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "fix_0001_dev_context_package",
+      "target": "tc_fix_0001_otp_login_test_plan",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "fix_0001_dev_role_exclusion_rationale",
+      "target": "fix_0001_dev_context_package",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_approval_state_rules",
+      "target": "review_fix_approval_state_valid_states",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_definition_of_ready",
+      "target": "review_fix_ready_artifact_readiness_criteria",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/docs/definition-of-ready.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_definition_of_done",
+      "target": "review_fix_done_completion_criteria",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_source_reference_rules",
+      "target": "review_fix_source_preferred_evidence_sources",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tmp/review-fix/docs/source-reference-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "final_smoke_srs_srs_template",
+      "target": "review_fix_srs_srs_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/final-smoke/templates/srs.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "final_smoke_test_plan_test_plan_template",
+      "target": "review_fix_test_plan_test_plan_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/final-smoke/templates/test-plan.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_adr_adr_template",
+      "target": "adr_fix_0001_use_redis_for_otp",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.76,
+      "source_file": "tmp/review-fix/templates/adr.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_api_design_api_template",
+      "target": "api_fix_0001_otp_login_api",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.78,
+      "source_file": "tmp/review-fix/templates/api-design.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_sdd_sdd_template",
+      "target": "sdd_fix_0001_login_with_otp_design",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "tmp/review-fix/templates/sdd.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_srs_srs_template",
+      "target": "req_fix_0001_login_with_otp",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.83,
+      "source_file": "tmp/review-fix/templates/srs.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_test_plan_test_plan_template",
+      "target": "tc_fix_0001_otp_login_test_plan",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.83,
+      "source_file": "tmp/review-fix/templates/test-plan.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_approval_state_rules",
+      "target": "review_fix_approval_state_rules",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_definition_of_done",
+      "target": "review_fix_definition_of_done",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_definition_of_ready",
+      "target": "review_fix_definition_of_ready",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/docs/definition-of-ready.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_source_reference_rules",
+      "target": "review_fix_source_reference_rules",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.95,
+      "source_file": "tmp/review-smoke/docs/source-reference-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "req_demo_0001_login_with_otp",
+      "target": "req_fix_0001_login_with_otp",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.93,
+      "source_file": "tmp/review-smoke/artifacts/requirements/REQ-DEMO-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_definition_of_ready",
+      "target": "review_fix_srs_srs_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.84,
+      "source_file": "tmp/review-fix/docs/definition-of-ready.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_source_reference_rules",
+      "target": "review_fix_srs_srs_template",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.88,
+      "source_file": "tmp/review-fix/docs/source-reference-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_definition_of_done",
+      "target": "fix_0001_dev_context_package",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.82,
+      "source_file": "tmp/review-fix/docs/definition-of-done.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_sdd_sdd_template",
+      "target": "review_fix_srs_srs_template",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.84,
+      "source_file": "tmp/review-fix/templates/sdd.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_test_plan_test_plan_template",
+      "target": "review_fix_sdd_sdd_template",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.83,
+      "source_file": "tmp/review-fix/templates/test-plan.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_test_plan_test_plan_template",
+      "target": "review_fix_srs_srs_template",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "tmp/review-fix/templates/test-plan.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "api_fix_0001_otp_login_api",
+      "target": "sdd_fix_0001_login_with_otp_design",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.76,
+      "source_file": "tmp/review-fix/artifacts/api/API-FIX-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "sdd_fix_0001_login_with_otp_design",
+      "target": "req_fix_0001_login_with_otp",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "tmp/review-fix/artifacts/design/SDD-FIX-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tc_fix_0001_otp_login_test_plan",
+      "target": "req_fix_0001_login_with_otp",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.82,
+      "source_file": "tmp/review-fix/artifacts/test/TC-FIX-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tc_fix_0001_otp_login_test_plan",
+      "target": "sdd_fix_0001_login_with_otp_design",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.82,
+      "source_file": "tmp/review-fix/artifacts/test/TC-FIX-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "adr_fix_0001_use_redis_for_otp",
+      "target": "api_fix_0001_otp_login_api",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.72,
+      "source_file": "tmp/review-fix/artifacts/adr/ADR-FIX-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "adr_fix_0001_use_redis_for_otp",
+      "target": "sdd_fix_0001_login_with_otp_design",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.78,
+      "source_file": "tmp/review-fix/artifacts/adr/ADR-FIX-0001.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_fix_approval_state_rules",
+      "target": "req_fix_0001_login_with_otp",
+      "relation": "conceptually_related_to",
+      "confidence": "AMBIGUOUS",
+      "confidence_score": 0.25,
+      "source_file": "tmp/review-fix/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "review_smoke_approval_state_rules",
+      "target": "req_demo_0001_login_with_otp",
+      "relation": "conceptually_related_to",
+      "confidence": "AMBIGUOUS",
+      "confidence_score": 0.25,
+      "source_file": "tmp/review-smoke/docs/approval-state-rules.md",
+      "source_location": null,
+      "weight": 1.0
+    }
+  ],
+  "hyperedges": [
+    {
+      "id": "fix_0001_artifact_bundle",
+      "label": "FIX-0001 Artifact Bundle",
+      "nodes": [
+        "adr_fix_0001_use_redis_for_otp",
+        "api_fix_0001_otp_login_api",
+        "sdd_fix_0001_login_with_otp_design",
+        "req_fix_0001_login_with_otp",
+        "tc_fix_0001_otp_login_test_plan"
+      ],
+      "relation": "participate_in",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "tmp/review-fix/packages/FIX-0001.dev.context.md"
+    },
+    {
+      "id": "review_fix_governance_rules",
+      "label": "Review Fix Governance Rules",
+      "nodes": [
+        "review_fix_approval_state_rules",
+        "review_fix_definition_of_done",
+        "review_fix_definition_of_ready",
+        "review_fix_source_reference_rules"
+      ],
+      "relation": "form",
+      "confidence": "INFERRED",
+      "confidence_score": 0.86,
+      "source_file": "tmp/review-fix/docs/definition-of-ready.md"
+    },
+    {
+      "id": "review_fix_template_family",
+      "label": "Review Fix Template Family",
+      "nodes": [
+        "review_fix_adr_adr_template",
+        "review_fix_api_design_api_template",
+        "review_fix_sdd_sdd_template",
+        "review_fix_srs_srs_template",
+        "review_fix_test_plan_test_plan_template"
+      ],
+      "relation": "form",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "tmp/review-fix/templates/srs.md"
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}
