@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
-import { makeTempDir, cleanupTempDir, runCli, exists, readText } from "./helpers.ts";
+import { makeTempDir, cleanupTempDir, runCli, exists, readText, isolatedEnv } from "./helpers.ts";
 
 // ─── Missing / invalid --agent ────────────────────────────────────────────────
 
@@ -31,40 +31,52 @@ describe("install-skills - unknown --agent", () => {
 
 describe("install-skills --agent cursor", () => {
   let dir: string;
-  before(() => { dir = makeTempDir("acs-is-cursor-"); });
-  after(() => cleanupTempDir(dir));
+  let home: string;
+  before(() => {
+    dir = makeTempDir("acs-is-cursor-");
+    home = makeTempDir("acs-is-cursor-home-");
+  });
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("exits 0 and creates expected files", () => {
-    const r = runCli(["install-skills", "--agent", "cursor"], { cwd: dir });
+    const r = runCli(["install-skills", "--agent", "cursor"], { cwd: dir, env: isolatedEnv(home) });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, "AGENTS.md")), "AGENTS.md missing");
-    assert.ok(exists(join(dir, ".cursor/skills/agent-context-store/SKILL.md")), "SKILL.md missing");
+    assert.ok(exists(join(dir, "AGENTS.md")), "AGENTS.md missing from project dir");
+    assert.ok(exists(join(home, ".cursor/skills/agent-context-store/SKILL.md")), "SKILL.md missing from user dir");
   });
 });
 
 describe("install-skills --agent claude", () => {
   let dir: string;
-  before(() => { dir = makeTempDir("acs-is-claude-"); });
-  after(() => cleanupTempDir(dir));
+  let home: string;
+  before(() => {
+    dir = makeTempDir("acs-is-claude-");
+    home = makeTempDir("acs-is-claude-home-");
+  });
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("exits 0 and creates expected files", () => {
-    const r = runCli(["install-skills", "--agent", "claude"], { cwd: dir });
+    const r = runCli(["install-skills", "--agent", "claude"], { cwd: dir, env: isolatedEnv(home) });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, "CLAUDE.md")), "CLAUDE.md missing");
-    assert.ok(exists(join(dir, ".claude/skills/agent-context-store/SKILL.md")), "SKILL.md missing");
+    assert.ok(exists(join(dir, "CLAUDE.md")), "CLAUDE.md missing from project dir");
+    assert.ok(exists(join(home, ".claude/skills/agent-context-store/SKILL.md")), "SKILL.md missing from user dir");
   });
 });
 
 describe("install-skills --agent codex", () => {
   let dir: string;
-  before(() => { dir = makeTempDir("acs-is-codex-"); });
-  after(() => cleanupTempDir(dir));
+  let home: string;
+  before(() => {
+    dir = makeTempDir("acs-is-codex-");
+    home = makeTempDir("acs-is-codex-home-");
+  });
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("exits 0 and creates expected files", () => {
-    const r = runCli(["install-skills", "--agent", "codex"], { cwd: dir });
+    const r = runCli(["install-skills", "--agent", "codex"], { cwd: dir, env: isolatedEnv(home) });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, "AGENTS.md")), "AGENTS.md missing");
-    assert.ok(exists(join(dir, ".agents/skills/agent-context-store/SKILL.md")), "SKILL.md missing");
+    assert.ok(exists(join(dir, "AGENTS.md")), "AGENTS.md missing from project dir");
+    assert.ok(exists(join(home, ".codex/skills/agent-context-store/SKILL.md")), "SKILL.md missing from user dir");
   });
 });
 
@@ -83,15 +95,19 @@ describe("install-skills --agent openclaw", () => {
 
 describe("install-skills --agent all", () => {
   let dir: string;
-  before(() => { dir = makeTempDir("acs-is-all-"); });
-  after(() => cleanupTempDir(dir));
+  let home: string;
+  before(() => {
+    dir = makeTempDir("acs-is-all-");
+    home = makeTempDir("acs-is-all-home-");
+  });
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("creates skill files for cursor, claude, and codex", () => {
-    const r = runCli(["install-skills", "--agent", "all"], { cwd: dir });
+    const r = runCli(["install-skills", "--agent", "all"], { cwd: dir, env: isolatedEnv(home) });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".cursor/skills/agent-context-store/SKILL.md")));
-    assert.ok(exists(join(dir, ".claude/skills/agent-context-store/SKILL.md")));
-    assert.ok(exists(join(dir, ".agents/skills/agent-context-store/SKILL.md")));
+    assert.ok(exists(join(home, ".cursor/skills/agent-context-store/SKILL.md")));
+    assert.ok(exists(join(home, ".claude/skills/agent-context-store/SKILL.md")));
+    assert.ok(exists(join(home, ".codex/skills/agent-context-store/SKILL.md")));
   });
 
   test("AGENTS.md is appended only once for a single run", async () => {
@@ -105,31 +121,35 @@ describe("install-skills --agent all", () => {
 
 describe("install-skills skill file replacement", () => {
   let dir: string;
+  let home: string;
   before(async () => {
     dir = makeTempDir("acs-is-replace-");
-    const skillDir = join(dir, ".cursor/skills/agent-context-store");
+    home = makeTempDir("acs-is-replace-home-");
+    const skillDir = join(home, ".cursor/skills/agent-context-store");
     await mkdir(skillDir, { recursive: true });
     await writeFile(join(skillDir, "SKILL.md"), "STALE CONTENT", "utf8");
   });
-  after(() => cleanupTempDir(dir));
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("replaces existing skill file with bundled content", async () => {
-    runCli(["install-skills", "--agent", "cursor"], { cwd: dir });
-    const content = await readText(join(dir, ".cursor/skills/agent-context-store/SKILL.md"));
+    runCli(["install-skills", "--agent", "cursor"], { cwd: dir, env: isolatedEnv(home) });
+    const content = await readText(join(home, ".cursor/skills/agent-context-store/SKILL.md"));
     assert.ok(!content.includes("STALE CONTENT"), "Stale content was not replaced");
   });
 });
 
 describe("install-skills AGENTS.md append behavior", () => {
   let dir: string;
+  let home: string;
   before(async () => {
     dir = makeTempDir("acs-is-append-");
+    home = makeTempDir("acs-is-append-home-");
     await writeFile(join(dir, "AGENTS.md"), "# Existing Content\n", "utf8");
   });
-  after(() => cleanupTempDir(dir));
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("appends to AGENTS.md rather than replacing it", async () => {
-    runCli(["install-skills", "--agent", "cursor"], { cwd: dir });
+    runCli(["install-skills", "--agent", "cursor"], { cwd: dir, env: isolatedEnv(home) });
     const content = await readText(join(dir, "AGENTS.md"));
     assert.ok(content.includes("# Existing Content"), "Existing content was lost");
     assert.ok(content.length > "# Existing Content\n".length, "Nothing was appended");
@@ -140,11 +160,15 @@ describe("install-skills AGENTS.md append behavior", () => {
 
 describe("install-agent-config (deprecated alias)", () => {
   let dir: string;
-  before(() => { dir = makeTempDir("acs-is-alias-"); });
-  after(() => cleanupTempDir(dir));
+  let home: string;
+  before(() => {
+    dir = makeTempDir("acs-is-alias-");
+    home = makeTempDir("acs-is-alias-home-");
+  });
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
 
   test("still works and prints deprecation warning", () => {
-    const r = runCli(["install-agent-config"], { cwd: dir });
+    const r = runCli(["install-agent-config"], { cwd: dir, env: isolatedEnv(home) });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     const out = r.stdout + r.stderr;
     assert.ok(

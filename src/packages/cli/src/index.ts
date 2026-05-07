@@ -2,6 +2,7 @@
 import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -43,28 +44,23 @@ interface AgentConfigFile {
 
 const ROLE_SKILLS = ["agent-context-store", "acs-ba", "acs-sa", "acs-dev", "acs-qa"] as const;
 
-function roleSkillFiles(prefix: string): AgentConfigFile[] {
-  return ROLE_SKILLS.map(skill => ({
-    source: `skills/${skill}/SKILL.md`,
-    target: `${prefix}/skills/${skill}/SKILL.md`,
-    mode: "replace" as const
-  }));
-}
-
-const agentConfigFilesByAgent: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
-  cursor: [
-    { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    ...roleSkillFiles(".cursor")
-  ],
-  claude: [
-    { source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" },
-    ...roleSkillFiles(".claude")
-  ],
-  codex: [
-    { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    ...roleSkillFiles(".agents")
-  ]
+// Project-level config files installed into the target repo root
+const agentProjectFiles: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
+  cursor: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
+  claude: [{ source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" }],
+  codex: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
 };
+
+// User-level dotdir names: skills go to ~/<dir>/skills/
+const agentSkillDirName: Record<Exclude<AgentName, "openclaw" | "all">, string> = {
+  cursor: ".cursor",
+  claude: ".claude",
+  codex: ".codex",
+};
+
+function getUserSkillsDir(agent: Exclude<AgentName, "openclaw" | "all">): string {
+  return path.join(os.homedir(), agentSkillDirName[agent], "skills");
+}
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
@@ -246,13 +242,12 @@ async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ 
     result.warnings.push("OpenClaw skill target is not available yet");
   }
 
-  const files = uniqueConfigFiles(agents.flatMap((a) => agentConfigFilesByAgent[a]));
-
-  for (const file of files) {
+  // Install project-level config files (AGENTS.md / CLAUDE.md) into rootDir
+  const projectFiles = uniqueConfigFiles(agents.flatMap((a) => agentProjectFiles[a]));
+  for (const file of projectFiles) {
     const sourcePath = path.join(sourceRoot, file.source);
     const targetPath = path.join(rootDir, file.target);
     const targetExists = existsSync(targetPath);
-
     await mkdir(path.dirname(targetPath), { recursive: true });
     if (targetExists && file.mode === "append") {
       const content = (await readFile(sourcePath, "utf8")).trimEnd();
@@ -260,11 +255,30 @@ async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ 
     } else {
       await copyFile(sourcePath, targetPath);
     }
-
     if (targetExists) {
       result.updated.push(toPosix(file.target));
     } else {
       result.created.push(toPosix(file.target));
+    }
+  }
+
+  // Install skill files into the user's global agent directory (~/.claude/, ~/.cursor/, ~/.codex/)
+  const installedSkillTargets = new Set<string>();
+  for (const a of agents) {
+    for (const skill of ROLE_SKILLS) {
+      const sourcePath = path.join(sourceRoot, "skills", skill, "SKILL.md");
+      const targetPath = path.join(getUserSkillsDir(a), skill, "SKILL.md");
+      if (installedSkillTargets.has(targetPath)) continue;
+      installedSkillTargets.add(targetPath);
+      const targetExists = existsSync(targetPath);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await copyFile(sourcePath, targetPath);
+      const displayPath = toPosix(path.relative(os.homedir(), targetPath));
+      if (targetExists) {
+        result.updated.push(displayPath);
+      } else {
+        result.created.push(displayPath);
+      }
     }
   }
 

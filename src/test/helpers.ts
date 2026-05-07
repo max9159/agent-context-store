@@ -102,6 +102,7 @@ export function isolatedEnv(envDir: string): NodeJS.ProcessEnv {
     ...process.env,
     APPDATA: envDir,
     HOME: envDir,
+    USERPROFILE: envDir,
     XDG_DATA_HOME: join(envDir, ".local", "share"),
   };
 }
