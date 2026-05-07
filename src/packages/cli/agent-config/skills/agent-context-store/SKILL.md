@@ -81,3 +81,46 @@ Use `acs package --task TASK-123 --role dev --format json` for automation.
 - Run `acs index` after changing artifacts or handoffs.
 - Report created or updated artifact, handoff, and package paths.
 - Call out open questions and validation warnings.
+
+## Handoff to Next Agent (mandatory when role work is complete)
+
+After validation passes, always create the handoff and package context for the receiving role — do not stop at `acs validate`. This applies to every role transition in the workflow:
+
+| Completing role | Receiving role | Handoff command |
+|-----------------|----------------|-----------------|
+| BA              | SA             | `acs handoff create --from ba --to sa --task TASK-123` |
+| SA              | DEV            | `acs handoff create --from sa --to dev --task TASK-123` |
+| DEV             | QA             | `acs handoff create --from dev --to qa --task TASK-123` |
+
+Run for whichever transition applies (replace `<FROM>` and `<TO>` with the actual roles):
+
+```bash
+acs handoff create --from <FROM> --to <TO> --task TASK-123
+acs package --task TASK-123 --role <TO>
+acs index
+```
+
+Then output a **handoff prompt** the next agent can use as their opening message:
+
+```
+[HANDOFF: <FROM> → <TO> | TASK-123]
+
+The <FROM> role has completed its work for TASK-123.
+
+Artifacts ready for you:
+- <paths to artifacts created by the completing role>
+
+Context package: <path printed by acs package>
+
+Your next steps (<TO> role):
+1. Read the context package above.
+2. Run: acs role explain <TO> --task TASK-123
+3. Create your artifact: acs <TO> new <artifact-type> --task TASK-123
+4. Fill all sections, then validate: acs validate
+5. When done, create handoff to the next role: acs handoff create --from <TO> --to <NEXT> --task TASK-123
+
+Open questions from <FROM> (must be resolved before or during your work):
+- <list any open questions from the completed artifact>
+```
+
+Fill in all placeholders — `<FROM>`, `<TO>`, `<NEXT>`, artifact paths, and open questions — from the actual task context.
