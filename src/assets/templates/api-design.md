@@ -16,17 +16,19 @@ outputs: []
 
 ## API Summary
 
-Describe the API or integration contract.
+Describe the API or integration contract in 2–3 sentences. Who calls it, what does it do, and what does the caller receive? (Source: conversation / SRS artifact ID / existing route files you read.)
 
 ## Endpoints / Messages
 
-- Name:
-- Method:
-- Path or topic:
-- Request:
-- Response:
+- Name: (human-readable operation name)
+- Method: (HTTP verb or message type)
+- Path or topic: (exact path or queue/topic name)
+- Request: (fields, types, and which are required)
+- Response: (fields, types, and status codes)
+
+(Repeat block for each endpoint.)
 
 ## Compatibility
 
-- Breaking changes:
-- Migration notes:
+- Breaking changes: (list any changes that break existing callers, or "None")
+- Migration notes: (steps callers must take, or "Not applicable")

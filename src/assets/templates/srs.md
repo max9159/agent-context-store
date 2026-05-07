@@ -16,23 +16,25 @@ outputs: []
 
 ## Business Goal
 
-Describe the outcome this requirement supports.
+What business outcome does this requirement support? State in 1–2 sentences using the user's words or the ticket description.
 
 ## Scope
 
-- In scope:
-- Out of scope:
+- In scope: (list what this requirement covers)
+- Out of scope: (list what is explicitly excluded — "not applicable" is not acceptable)
 
 ## Requirements
 
-- {{ARTIFACT_ID}}-R001:
+- {{ARTIFACT_ID}}-R001: (write each requirement as a testable statement: "The system shall...")
 
 ## Open Questions
 
-- None yet.
+- (List any unclear items that must be resolved before design. If none, write "None — all requirements are clear.")
 
 ## Validation Checklist
 
-- [ ] Requirement IDs are stable.
-- [ ] Source references are recorded.
-- [ ] Open questions are explicit.
+- [ ] Each requirement is a testable statement.
+- [ ] Requirement IDs are stable and unique.
+- [ ] Source references are filled in the frontmatter.
+- [ ] Out-of-scope items are explicitly listed.
+- [ ] Open questions are addressed or escalated.

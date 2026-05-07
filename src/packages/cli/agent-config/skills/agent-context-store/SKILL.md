@@ -34,7 +34,17 @@ acs dev new implementation-note --task TASK-123
 acs qa new test-plan --task TASK-123 --title "Feature test plan"
 ```
 
-Edit the generated Markdown files with the actual requirements, decisions, source references, risks, and test scope.
+### Fill Content (mandatory — do this immediately after each `acs new`)
+
+After the CLI prints the generated file path, **you must fill in all sections yourself** before moving to the next step. Do not leave placeholder text.
+
+For each section:
+- Write concrete content based on the current conversation, user requirements, and relevant source files you have read.
+- List every file path or document you consulted under `source_refs` in the frontmatter.
+- Replace every placeholder line (e.g. "Describe the...", "None yet.", `- R001:`) with real content.
+- Complete the Validation Checklist at the end of the file — check each item only when it is actually satisfied.
+
+Do not proceed to handoff or packaging until all artifact sections contain real content and `acs validate` passes.
 
 ## Create Handoffs
 

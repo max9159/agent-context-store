@@ -16,22 +16,25 @@ outputs: []
 
 ## Test Objective
 
-Describe what this test plan validates.
+What does this plan validate? Reference the SRS requirement IDs or SDD sections this plan covers.
 
 ## Test Cases
 
 - {{ARTIFACT_ID}}-T001:
-  - Given:
-  - When:
-  - Then:
+  - Given: (precondition — system state before the action)
+  - When: (the action or event under test)
+  - Then: (expected observable outcome — must be specific and verifiable)
+
+(Add more test cases as needed. Each case must map to at least one requirement or design decision.)
 
 ## Evidence
 
-- Execution result:
-- Logs or reports:
+- Execution result: (where to find test run output — e.g., CI job URL, log path)
+- Logs or reports: (specific files or dashboards that prove the outcome)
 
 ## Validation Checklist
 
-- [ ] Test cases trace to requirements or design artifacts.
-- [ ] Expected results are explicit.
-- [ ] Evidence location is recorded.
+- [ ] Every test case traces to a requirement ID or design decision.
+- [ ] Expected results in "Then:" are specific and verifiable.
+- [ ] Evidence location is recorded — not left as placeholder.
+- [ ] Edge cases and failure paths are included.
