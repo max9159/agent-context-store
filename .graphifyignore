@@ -6,6 +6,7 @@ dist/
 *.generated.py
 AGENTS.md
 CLAUDE.md
+.cursor/
 
 # Project Specific Ignore
 .turbo/
@@ -13,3 +14,4 @@ CLAUDE.md
 *.log
 *.tsbuildinfo
 tmp/
+docs/
