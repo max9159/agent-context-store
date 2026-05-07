@@ -1532,7 +1532,7 @@ function defaultTemplateText(fileName: string): string | null {
 
 async function readAssetText(assetDir: "schemas" | "templates", fileName: string): Promise<string> {
   const rootDir = findToolkitRoot();
-  return readFile(path.join(rootDir, assetDir, fileName), "utf8");
+  return readFile(path.join(rootDir, "src", "assets", assetDir, fileName), "utf8");
 }
 
 async function readContextTemplate(storeDir: string, templateName: string): Promise<string> {
@@ -1849,12 +1849,15 @@ function findToolkitRoot(): string {
   const currentFile = fileURLToPath(import.meta.url);
   let currentDir = path.dirname(currentFile);
   for (let depth = 0; depth < 8; depth += 1) {
-    if (existsSync(path.join(currentDir, "schemas")) && existsSync(path.join(currentDir, "templates"))) {
+    if (
+      existsSync(path.join(currentDir, "src", "assets", "schemas"))
+      && existsSync(path.join(currentDir, "src", "assets", "templates"))
+    ) {
       return currentDir;
     }
     currentDir = path.dirname(currentDir);
   }
-  throw new Error("Could not locate agent-context-store schemas/templates assets");
+  throw new Error("Could not locate agent-context-store src/assets schemas/templates");
 }
 
 async function appendAudit(storeDir: string, message: string): Promise<void> {

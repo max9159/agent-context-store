@@ -7,7 +7,7 @@ import { dirname, resolve } from "node:path";
 import { makeTempDir, cleanupTempDir, runCli, exists } from "./helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, "..");
+const repoRoot = resolve(__dirname, "../..");
 
 // ─── Help / Version ───────────────────────────────────────────────────────────
 
@@ -29,14 +29,14 @@ describe("acs --version", () => {
   test("exits 0 and prints acs <version>", async () => {
     const r = runCli(["--version"]);
     assert.equal(r.status, 0);
-    const pkg = JSON.parse(await readFile(join(repoRoot, "packages/cli/package.json"), "utf8")) as { version: string };
+    const pkg = JSON.parse(await readFile(join(repoRoot, "src/packages/cli/package.json"), "utf8")) as { version: string };
     assert.ok(r.stdout.includes(`acs ${pkg.version}`), `stdout: ${r.stdout}`);
   });
 
   test("-v alias also works", async () => {
     const r = runCli(["-v"]);
     assert.equal(r.status, 0);
-    const pkg = JSON.parse(await readFile(join(repoRoot, "packages/cli/package.json"), "utf8")) as { version: string };
+    const pkg = JSON.parse(await readFile(join(repoRoot, "src/packages/cli/package.json"), "utf8")) as { version: string };
     assert.ok(r.stdout.includes(`acs ${pkg.version}`));
   });
 });

@@ -8,12 +8,12 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm build && node --experimental-strip-types --test \"test/*.spec.ts\"",
-    "test:integration": "pnpm build && node --experimental-strip-types --test \"test/integration.spec.ts\"",
-    "test:e2e": "pnpm build && node --experimental-strip-types --test \"test/e2e/*.spec.ts\"",
-    "test:coverage": "pnpm build && node --experimental-strip-types --experimental-test-coverage --test \"test/*.spec.ts\"",
+    "test": "pnpm build && node --experimental-strip-types --test \"src/test/*.spec.ts\"",
+    "test:integration": "pnpm build && node --experimental-strip-types --test \"src/test/integration.spec.ts\"",
+    "test:e2e": "pnpm build && node --experimental-strip-types --test \"src/test/e2e/*.spec.ts\"",
+    "test:coverage": "pnpm build && node --experimental-strip-types --experimental-test-coverage --test \"src/test/*.spec.ts\"",
     "check": "pnpm test",
-    "smoke": "node packages/cli/dist/index.js --help"
+    "smoke": "node src/packages/cli/dist/index.js --help"
   },
   "keywords": [
     "ai-agent",

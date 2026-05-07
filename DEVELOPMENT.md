@@ -23,33 +23,36 @@ pnpm smoke
 ## Project Layout
 
 ```text
-packages/
-  cli/       # acs command-line entrypoint
-    agent-config/   # bundled agent skill templates (included in npm package)
-      AGENTS.md
-      CLAUDE.md
-      skills/agent-context-store/SKILL.md  # shared skill, one copy for all agents
-  core/      # policy-aware context store creation, validation, handoff, packaging logic
-schemas/    # source JSON schemas; defaults are also embedded into core for published installs
-templates/  # source Markdown templates; defaults are also embedded into core for published installs
+src/
+  packages/
+    cli/       # acs command-line entrypoint
+      agent-config/   # bundled agent skill templates (included in npm package)
+        AGENTS.md
+        CLAUDE.md
+        skills/agent-context-store/SKILL.md  # shared skill, one copy for all agents
+    core/      # policy-aware context store creation, validation, handoff, packaging logic
+  assets/
+    schemas/   # source JSON schemas; defaults are also embedded into core for published installs
+    templates/ # source Markdown templates; defaults are also embedded into core for published installs
+  test/        # test sources and helpers
 examples/   # usage examples
 ```
 
-The `agent-config/` directory is listed in `packages/cli/package.json` under `files` so it is included in every npm publish. The installer uses an upward path search from the compiled `dist/index.js` to locate it at runtime, which works both in the local source tree and after a global npm install.
-The core package seeds `.acs/acs.yaml`, `roles/`, `artifact-types/`, `workflows/`, `schemas/`, and `templates/` during `acs init`. Default policy/schema/template text is embedded in `packages/core/dist` so initialization does not depend on source-tree assets after publish.
+The `agent-config/` directory is listed in `src/packages/cli/package.json` under `files` so it is included in every npm publish. The installer uses an upward path search from the compiled `dist/index.js` to locate it at runtime, which works both in the local source tree and after a global npm install.
+The core package seeds `.acs/acs.yaml`, `roles/`, `artifact-types/`, `workflows/`, `schemas/`, and `templates/` during `acs init`. Default policy/schema/template text is embedded in `src/packages/core/dist` so initialization does not depend on source-tree assets after publish.
 
 ## Local CLI Usage
 
 Run the local CLI directly after building:
 
 ```bash
-node packages/cli/dist/index.js --help
+node src/packages/cli/dist/index.js --help
 ```
 
 When following user-facing examples from this source repository instead of a published install, replace `acs` with the local CLI path:
 
 ```bash
-node ../agent-context-store/packages/cli/dist/index.js
+node ../agent-context-store/src/packages/cli/dist/index.js
 ```
 
 ## Local Demo
@@ -58,16 +61,16 @@ node ../agent-context-store/packages/cli/dist/index.js
 mkdir tmp/demo
 cd tmp/demo
 
-node ../../packages/cli/dist/index.js init
-node ../../packages/cli/dist/index.js status
-node ../../packages/cli/dist/index.js roles
-node ../../packages/cli/dist/index.js ba new srs --task DEMO-0001 --title "Login with OTP"
-node ../../packages/cli/dist/index.js role explain dev --task DEMO-0001
-node ../../packages/cli/dist/index.js next --role sa --task DEMO-0001
-node ../../packages/cli/dist/index.js validate --role ba --task DEMO-0001
-node ../../packages/cli/dist/index.js handoff create --from ba --to sa --task DEMO-0001
-node ../../packages/cli/dist/index.js handoff check HOFF-DEMO-0001-BA-SA
-node ../../packages/cli/dist/index.js package --task DEMO-0001 --role sa
+node ../../src/packages/cli/dist/index.js init
+node ../../src/packages/cli/dist/index.js status
+node ../../src/packages/cli/dist/index.js roles
+node ../../src/packages/cli/dist/index.js ba new srs --task DEMO-0001 --title "Login with OTP"
+node ../../src/packages/cli/dist/index.js role explain dev --task DEMO-0001
+node ../../src/packages/cli/dist/index.js next --role sa --task DEMO-0001
+node ../../src/packages/cli/dist/index.js validate --role ba --task DEMO-0001
+node ../../src/packages/cli/dist/index.js handoff create --from ba --to sa --task DEMO-0001
+node ../../src/packages/cli/dist/index.js handoff check HOFF-DEMO-0001-BA-SA
+node ../../src/packages/cli/dist/index.js package --task DEMO-0001 --role sa
 ```
 
 This creates artifacts under `.acs/` (in-repo mode). Pass `--mode dedicated` to init if you want to use the folder as a standalone store.
@@ -84,15 +87,15 @@ pnpm test:coverage       # build, then run unit + integration with coverage repo
 pnpm check               # alias for pnpm test
 ```
 
-Tests run against the **compiled output** in `packages/cli/dist` and `packages/core/dist`. The build step is included in every `pnpm test*` command, so you do not need to run `pnpm build` separately.
+Tests run against the **compiled output** in `src/packages/cli/dist` and `src/packages/core/dist`. The build step is included in every `pnpm test*` command, so you do not need to run `pnpm build` separately.
 
 ### Test Layout
 
 ```text
-test/
+src/test/
   helpers.ts              # shared utilities: makeTempDir, runCli, exists, readText,
   |                       #   readJson, withTempProject, isolatedEnv, initStore
-  core.spec.ts            # core API tests — import packages/core/dist directly
+  core.spec.ts            # core API tests — import src/packages/core/dist directly
   cli.spec.ts             # CLI command tests — spawn the compiled binary per command
   install-skills.spec.ts  # install-skills command tests (agents, append/replace, alias)
   integration.spec.ts     # scenario tests — full SDLC, mode variants, role enforcement,

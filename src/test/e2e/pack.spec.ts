@@ -29,9 +29,9 @@ import { fileURLToPath } from "node:url";
 import { makeTempDir, cleanupTempDir, exists } from "../helpers.ts";
 
 const __dirname   = dirname(fileURLToPath(import.meta.url));
-const repoRoot    = resolve(__dirname, "../..");
-const coreDir     = join(repoRoot, "packages", "core");
-const cliDir      = join(repoRoot, "packages", "cli");
+const repoRoot    = resolve(__dirname, "../../..");
+const coreDir     = join(repoRoot, "src", "packages", "core");
+const cliDir      = join(repoRoot, "src", "packages", "cli");
 
 /** Run a shell command synchronously; throws on non-zero exit. */
 function run(

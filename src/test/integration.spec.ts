@@ -3,7 +3,7 @@
  *
  * Each describe block is a self-contained scenario that exercises a complete
  * user workflow rather than a single command. The full CLI binary (compiled
- * packages/cli/dist/index.js) is spawned for every call so these tests cover
+ * src/packages/cli/dist/index.js) is spawned for every call so these tests cover
  * the real process boundary: argument parsing, core API, file I/O, and exit codes.
  *
  * Isolation strategy

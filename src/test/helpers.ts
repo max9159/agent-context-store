@@ -8,10 +8,10 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Absolute path to the workspace root. */
-export const repoRoot = resolve(__dirname, "..");
+export const repoRoot = resolve(__dirname, "../..");
 
 /** Absolute path to the compiled CLI entry point. */
-export const cliPath = join(repoRoot, "packages", "cli", "dist", "index.js");
+export const cliPath = join(repoRoot, "src", "packages", "cli", "dist", "index.js");
 
 /** Create a uniquely-named temp directory under the OS temp folder. */
 export function makeTempDir(prefix = "acs-test-"): string {
@@ -43,7 +43,8 @@ export interface RunCliOptions {
 
 /**
  * Run the compiled CLI synchronously and return exit code + captured output.
- * Uses the compiled `packages/cli/dist/index.js` so it exercises the real build
+ * Uses the compiled `src/packages/cli/dist/index.js` so it exercises the real
+ * build
  * artifact, not TypeScript source directly.
  */
 export function runCli(args: string[], options: RunCliOptions = {}): CliResult {
