@@ -2,8 +2,10 @@
 import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { select, checkbox, input, confirm } from "@inquirer/prompts";
 import {
   buildContextPackage,
   buildIndex,
@@ -43,28 +45,23 @@ interface AgentConfigFile {
 
 const ROLE_SKILLS = ["agent-context-store", "acs-ba", "acs-sa", "acs-dev", "acs-qa"] as const;
 
-function roleSkillFiles(prefix: string): AgentConfigFile[] {
-  return ROLE_SKILLS.map(skill => ({
-    source: `skills/${skill}/SKILL.md`,
-    target: `${prefix}/skills/${skill}/SKILL.md`,
-    mode: "replace" as const
-  }));
-}
-
-const agentConfigFilesByAgent: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
-  cursor: [
-    { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    ...roleSkillFiles(".cursor")
-  ],
-  claude: [
-    { source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" },
-    ...roleSkillFiles(".claude")
-  ],
-  codex: [
-    { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    ...roleSkillFiles(".agents")
-  ]
+// Project-level config files installed into the target repo root
+const agentProjectFiles: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
+  cursor: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
+  claude: [{ source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" }],
+  codex: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
 };
+
+// User-level dotdir names: skills go to ~/<dir>/skills/
+const agentSkillDirName: Record<Exclude<AgentName, "openclaw" | "all">, string> = {
+  cursor: ".cursor",
+  claude: ".claude",
+  codex: ".codex",
+};
+
+function getUserSkillsDir(agent: Exclude<AgentName, "openclaw" | "all">): string {
+  return path.join(os.homedir(), agentSkillDirName[agent], "skills");
+}
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
@@ -86,17 +83,28 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "init") {
     const args = parseArgs(rest);
-    const rootDir = String(args.positional[0] ?? args.flags["path"] ?? process.cwd());
     const modeArg = getStringFlag(args, "mode");
+    const pathArg = String(args.positional[0] ?? args.flags["path"] ?? "");
+
     if (modeArg && !(validModes as string[]).includes(modeArg)) {
       console.error(`ERROR Unknown mode "${modeArg}". Expected one of: ${validModes.join(", ")}`);
       process.exitCode = 1;
       return;
     }
-    const mode = modeArg as StoreMode | undefined;
-    const result = await initContextStore({ rootDir, mode });
-    const label = mode ? `Initialized context store (mode: ${mode})` : "Initialized context store";
-    printResult(label, result);
+
+    // Non-interactive path: --mode provided, or stdin is not a TTY
+    const isNonInteractive = (!!modeArg && (modeArg !== "dedicated" || !!pathArg)) || !process.stdin.isTTY;
+    if (isNonInteractive) {
+      const rootDir = pathArg || process.cwd();
+      const mode = (modeArg as StoreMode) ?? "in-repo";
+      const result = await initContextStore({ rootDir, mode });
+      const label = modeArg ? `Initialized context store (mode: ${mode})` : "Initialized context store";
+      printResult(label, result);
+      return;
+    }
+
+    // Interactive wizard
+    await runInitWizard();
     return;
   }
 
@@ -228,6 +236,75 @@ async function main(argv: string[]): Promise<void> {
   throw new Error(`Unknown command "${command}". Run "acs --help" for usage.`);
 }
 
+async function runInitWizard(): Promise<void> {
+  // Step 1 — store mode
+  const mode = await select<StoreMode>({
+    message: "How should the context store be hosted?",
+    choices: [
+      { value: "in-repo",    name: "in-repo    — .acs/ lives inside this project (default)" },
+      { value: "local",      name: "local      — stored in your user data dir, nothing committed" },
+      { value: "dedicated",  name: "dedicated  — a separate repo shared across multiple projects" },
+    ],
+    default: "in-repo",
+  });
+
+  // Step 2 — path (dedicated only)
+  let rootDir = process.cwd();
+  if (mode === "dedicated") {
+    rootDir = await input({
+      message: "Path to the dedicated store repo:",
+      default: process.cwd(),
+      validate: (v) => v.trim().length > 0 || "Path cannot be empty",
+    });
+  }
+
+  // Step 3 — agent skill targets (multi-select)
+  type SkillAgent = Exclude<AgentName, "openclaw" | "all">;
+  const agentChoices = await checkbox<SkillAgent>({
+    message: "Install agent skill files? (space to toggle)",
+    choices: [
+      { value: "claude", name: `Claude Code  → ~/.claude/skills/` },
+      { value: "cursor", name: `Cursor       → ~/.cursor/skills/` },
+      { value: "codex",  name: `Codex        → ~/.codex/skills/` },
+    ],
+  });
+
+  // Step 4 — confirm
+  const agentSummary = agentChoices.length > 0 ? agentChoices.join(", ") : "none";
+  const storePath = mode === "in-repo"
+    ? path.join(rootDir, ".acs")
+    : mode === "local"
+      ? path.join(os.homedir(), "Library", "Application Support", "agent-context-store", "stores", "<slug>")
+      : rootDir;
+
+  console.log("");
+  console.log(`  Mode:    ${mode}`);
+  console.log(`  Store:   ${storePath}`);
+  console.log(`  Skills:  ${agentSummary}`);
+  console.log("");
+
+  const proceed = await confirm({ message: "Proceed with initialization?", default: true });
+  if (!proceed) {
+    console.log("Aborted.");
+    return;
+  }
+
+  // Execute init
+  const result = await initContextStore({ rootDir, mode });
+  printResult(`Initialized context store (mode: ${mode})`, result);
+
+  // Execute skill installs
+  for (const agent of agentChoices) {
+    const skillResult = await installSkills(rootDir, agent);
+    if (skillResult.created.length > 0 || skillResult.updated.length > 0) {
+      printResult(`Installed ${agent} skills`, skillResult);
+    }
+    for (const w of skillResult.warnings) {
+      console.warn(`WARNING ${w}`);
+    }
+  }
+}
+
 async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ created: string[]; updated: string[]; warnings: string[] }> {
   const rootDir = path.resolve(rootDirInput);
   const sourceRoot = findAgentConfigRoot();
@@ -246,13 +323,12 @@ async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ 
     result.warnings.push("OpenClaw skill target is not available yet");
   }
 
-  const files = uniqueConfigFiles(agents.flatMap((a) => agentConfigFilesByAgent[a]));
-
-  for (const file of files) {
+  // Install project-level config files (AGENTS.md / CLAUDE.md) into rootDir
+  const projectFiles = uniqueConfigFiles(agents.flatMap((a) => agentProjectFiles[a]));
+  for (const file of projectFiles) {
     const sourcePath = path.join(sourceRoot, file.source);
     const targetPath = path.join(rootDir, file.target);
     const targetExists = existsSync(targetPath);
-
     await mkdir(path.dirname(targetPath), { recursive: true });
     if (targetExists && file.mode === "append") {
       const content = (await readFile(sourcePath, "utf8")).trimEnd();
@@ -260,11 +336,30 @@ async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ 
     } else {
       await copyFile(sourcePath, targetPath);
     }
-
     if (targetExists) {
       result.updated.push(toPosix(file.target));
     } else {
       result.created.push(toPosix(file.target));
+    }
+  }
+
+  // Install skill files into the user's global agent directory (~/.claude/, ~/.cursor/, ~/.codex/)
+  const installedSkillTargets = new Set<string>();
+  for (const a of agents) {
+    for (const skill of ROLE_SKILLS) {
+      const sourcePath = path.join(sourceRoot, "skills", skill, "SKILL.md");
+      const targetPath = path.join(getUserSkillsDir(a), skill, "SKILL.md");
+      if (installedSkillTargets.has(targetPath)) continue;
+      installedSkillTargets.add(targetPath);
+      const targetExists = existsSync(targetPath);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      await copyFile(sourcePath, targetPath);
+      const displayPath = toPosix(path.relative(os.homedir(), targetPath));
+      if (targetExists) {
+        result.updated.push(displayPath);
+      } else {
+        result.created.push(displayPath);
+      }
     }
   }
 
