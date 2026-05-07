@@ -35,7 +35,6 @@ jobs:
             [a, b, c + 1].join('.')
           ")
 
-          # 更新三個 package.json
           node -e "
             const fs = require('fs');
             const paths = [
@@ -52,19 +51,6 @@ jobs:
 
           echo "version=$NEW" >> $GITHUB_OUTPUT
           echo "Bumped $OLD → $NEW"
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Commit, tag, and push
-        run: |
-          VERSION=${{ steps.bump.outputs.version }}
-          git add package.json src/packages/core/package.json src/packages/cli/package.json
-          git commit -m "chore: release v$VERSION"
-          git tag "v$VERSION"
-          git push origin main --tags
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -98,3 +84,16 @@ jobs:
           npm view agent-context-store-core version
           echo "Checking agent-context-store@$VERSION"
           npm view agent-context-store version
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit, tag, and push
+        run: |
+          VERSION=${{ steps.bump.outputs.version }}
+          git add package.json src/packages/core/package.json src/packages/cli/package.json
+          git commit -m "chore: release v$VERSION"
+          git tag "v$VERSION"
+          git push origin main --tags
