@@ -409,14 +409,16 @@ function resolveStoreContext(inputDir: string): StoreContext {
 
 /** OS user-data base directory for local mode. */
 function getLocalBaseDir(): string {
-  const home = os.homedir();
   if (process.platform === "win32") {
-    return path.join(process.env["APPDATA"] ?? path.join(home, "AppData", "Roaming"), "agent-context-store");
+    const appdata = process.env["APPDATA"] ?? path.join(os.homedir(), "AppData", "Roaming");
+    return path.join(appdata, "agent-context-store");
   }
   if (process.platform === "darwin") {
+    const home = process.env["HOME"] ?? os.homedir();
     return path.join(home, "Library", "Application Support", "agent-context-store");
   }
-  return path.join(home, ".local", "share", "agent-context-store");
+  const xdgData = process.env["XDG_DATA_HOME"] ?? path.join(process.env["HOME"] ?? os.homedir(), ".local", "share");
+  return path.join(xdgData, "agent-context-store");
 }
 
 /** Derive a filesystem-safe slug from a project directory path. */

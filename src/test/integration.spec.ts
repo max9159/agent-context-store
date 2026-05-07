@@ -18,6 +18,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { platform } from "node:process";
 import {
   makeTempDir,
   cleanupTempDir,
@@ -27,6 +28,12 @@ import {
   readText,
   isolatedEnv,
 } from "./helpers.ts";
+
+function localBaseDir(envDir: string): string {
+  if (platform === "win32") return join(envDir, "agent-context-store");
+  if (platform === "darwin") return join(envDir, "Library", "Application Support", "agent-context-store");
+  return join(envDir, ".local", "share", "agent-context-store");
+}
 
 // ─── Scenario 1: Full SDLC in-repo workflow ───────────────────────────────────
 //
@@ -333,7 +340,7 @@ describe("Scenario: local mode isolation", () => {
   });
 
   test("store directory is created inside the isolated APPDATA directory", () => {
-    const storesBase = join(envDir, "agent-context-store", "stores");
+    const storesBase = join(localBaseDir(envDir), "stores");
     assert.ok(exists(storesBase), `stores/ must exist at ${storesBase}`);
   });
 
@@ -347,7 +354,7 @@ describe("Scenario: local mode isolation", () => {
     // No file should appear in the project dir
     assert.ok(!exists(join(projectDir, ".acs", "artifacts")));
     // The store inside envDir should have the artifact somewhere
-    const storesBase = join(envDir, "agent-context-store", "stores");
+    const storesBase = join(localBaseDir(envDir), "stores");
     assert.ok(exists(storesBase));
   });
 });
