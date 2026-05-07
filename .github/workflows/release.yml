@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          OLD=$(node -p "require('./package.json').version")
+          NEW=$(node -p "
+            const [a, b, c] = '$OLD'.split('.').map(Number);
+            [a, b, c + 1].join('.')
+          ")
+
+          # 更新三個 package.json
+          node -e "
+            const fs = require('fs');
+            const paths = [
+              './package.json',
+              './src/packages/core/package.json',
+              './src/packages/cli/package.json'
+            ];
+            paths.forEach(p => {
+              const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+              pkg.version = '$NEW';
+              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+            });
+          "
+
+          echo "version=$NEW" >> $GITHUB_OUTPUT
+          echo "Bumped $OLD → $NEW"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit, tag, and push
+        run: |
+          VERSION=${{ steps.bump.outputs.version }}
+          git add package.json src/packages/core/package.json src/packages/cli/package.json
+          git commit -m "chore: release v$VERSION"
+          git tag "v$VERSION"
+          git push origin main --tags
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+      - name: Dry run — core
+        run: pnpm --filter "agent-context-store-core" publish --dry-run --no-git-checks
+
+      - name: Dry run — cli
+        run: pnpm --filter "agent-context-store" publish --dry-run --no-git-checks
+
+      - name: Publish core
+        run: pnpm --filter "agent-context-store-core" publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish cli
+        run: pnpm --filter "agent-context-store" publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify registry
+        run: |
+          VERSION=${{ steps.bump.outputs.version }}
+          echo "Checking agent-context-store-core@$VERSION"
+          npm view agent-context-store-core version
+          echo "Checking agent-context-store@$VERSION"
+          npm view agent-context-store version
