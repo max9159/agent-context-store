@@ -89,17 +89,23 @@ acs install-skills --agent all --path /path/to/repo
 acs new srs --task DEMO-0001 --title "Login with OTP"
 acs new sdd --task DEMO-0001 --title "Login with OTP System Design"
 acs new adr --task DEMO-0001 --title "Use Redis for OTP State"
-acs new api --task DEMO-0001 --title "OTP Login API"
-acs new test --task DEMO-0001 --title "OTP Login Test Plan"
+acs sa new api-design --task DEMO-0001 --title "OTP Login API"
+acs dev new implementation-note --task DEMO-0001
+acs qa new test-plan --task DEMO-0001 --title "OTP Login Test Plan"
 ```
 
 Validate, create handoffs, and package context for the next role:
 
 ```bash
-acs validate
+acs roles
+acs role explain dev --task DEMO-0001
+acs next --role sa --task DEMO-0001
+acs validate --role sa --task DEMO-0001
 acs handoff create --from ba --to sa --task DEMO-0001
 acs handoff check HOFF-DEMO-0001-BA-SA
+acs handoff list --task DEMO-0001
 acs package --task DEMO-0001 --role sa
+acs dev package --task DEMO-0001
 acs index
 ```
 
@@ -112,7 +118,8 @@ Suggested agent instruction:
 ```text
 Use Agent Context Store for durable project context.
 Before creating or handing off work, run acs status and acs validate.
-Create task artifacts with acs new.
+Use acs roles, acs role explain, and acs next to follow the configured workflow.
+Create task artifacts with acs new or acs <role> new.
 Create role handoffs with acs handoff create.
 Generate the next role package with acs package.
 Commit context store changes to the configured Git repository.
@@ -121,17 +128,20 @@ Commit context store changes to the configured Git repository.
 Typical role flow:
 
 ```bash
-acs new srs --task TASK-123 --title "Feature requirement"
+acs ba new srs --task TASK-123 --title "Feature requirement"
 acs handoff create --from ba --to sa --task TASK-123
 acs package --task TASK-123 --role sa
 
-acs new sdd --task TASK-123 --title "Feature system design"
+acs sa new sdd --task TASK-123 --title "Feature system design"
+acs sa new api-design --task TASK-123 --title "Feature API design"
 acs handoff create --from sa --to dev --task TASK-123
 acs package --task TASK-123 --role dev
 
-acs new test --task TASK-123 --title "Feature test plan"
+acs dev new implementation-note --task TASK-123
 acs handoff create --from dev --to qa --task TASK-123
 acs package --task TASK-123 --role qa
+
+acs qa new test-plan --task TASK-123 --title "Feature test plan"
 ```
 
 ## Context Store Layout
@@ -141,17 +151,17 @@ acs package --task TASK-123 --role qa
 ```text
 .acs/
   config.yaml
+  acs.yaml
   index.json
   audit/
   artifacts/
-    requirements/
-    design/
-    adr/
-    api/
-    test/
+    <artifact-type>/
   handoffs/
   summaries/
   packages/
+  roles/
+  artifact-types/
+  workflows/
   schemas/
   templates/
   docs/
@@ -162,12 +172,16 @@ acs package --task TASK-123 --role qa
 ```text
 <store-root>/
   config.yaml
+  acs.yaml
   index.json
   audit/
   artifacts/
   handoffs/
   summaries/
   packages/
+  roles/
+  artifact-types/
+  workflows/
   schemas/
   templates/
   docs/
@@ -191,10 +205,14 @@ In **in-repo mode** all paths above are inside `.acs/`.
 | `acs init`           | Initializes the context store. Default mode is `in-repo` (`.acs/`).                                    | `acs init`, `acs init --mode local`                         |
 | `acs status`         | Shows current mode, store path, initialized state, and artifact/handoff counts.                         | `acs status`                                                 |
 | `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. | `acs install-skills --agent cursor`                          |
-| `acs new`            | Creates a new SDLC artifact such as requirements, design, ADR, API notes, or test plan.                 | `acs new srs --task TASK-123 --title "Feature requirements"` |
-| `acs validate`       | Validates the context store structure, artifact metadata, schemas, and handoff records.                 | `acs validate`                                               |
+| `acs roles`          | Lists configured role profiles.                                                                         | `acs roles`                                                  |
+| `acs role explain`   | Explains what a role can create/read and suggests task commands.                                        | `acs role explain dev --task TASK-123`                       |
+| `acs next`           | Shows missing inputs, suggested outputs, and next workflow commands.                                    | `acs next --role sa --task TASK-123`                         |
+| `acs new`            | Creates a configured SDLC artifact.                                                                     | `acs ba new srs --task TASK-123`                             |
+| `acs validate`       | Validates the context store structure, artifact metadata, schemas, and handoff records.                 | `acs validate --role dev --task TASK-123`                    |
 | `acs handoff create` | Creates a role-to-role handoff record for a task.                                                       | `acs handoff create --from sa --to dev --task TASK-123`      |
 | `acs handoff check`  | Validates a specific handoff before another agent relies on it.                                         | `acs handoff check HOFF-TASK-123-SA-DEV`                     |
+| `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             | `acs handoff list --task TASK-123`                           |
 | `acs package`        | Builds a role-specific context package for the next agent or automation step.                           | `acs package --task TASK-123 --role dev`                     |
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      | `acs index`                                                  |
 | `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              | `acs doctor`                                                 |
@@ -206,11 +224,18 @@ acs --version
 acs init [path] [--mode <in-repo|local|dedicated>]
 acs status
 acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
-acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]
-acs validate
+acs roles
+acs role explain <ROLE> [--task <TASK_ID>]
+acs new <ARTIFACT_TYPE> [--role <ROLE>] --task <TASK_ID> [--title <TITLE>]
+acs <ROLE> new <ARTIFACT_TYPE> --task <TASK_ID> [--title <TITLE>]
+acs next --role <ROLE> --task <TASK_ID>
+acs validate [--role <ROLE>] [--task <TASK_ID>] [--artifact <PATH>]
 acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>
 acs handoff check <HANDOFF_ID_OR_PATH>
+acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
+acs handoff list [--task <TASK_ID>] [--role <ROLE>]
 acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
+acs <ROLE> package --task <TASK_ID> [--format markdown|json]
 acs index
 acs doctor
 ```

@@ -14,6 +14,7 @@ Use Agent Context Store (`acs`) for durable project context, SDLC artifacts, and
 ```bash
 acs status
 acs doctor
+acs roles
 ```
 
 If validation fails, report the issue before creating new handoffs or packages.
@@ -23,11 +24,14 @@ If validation fails, report the issue before creating new handoffs or packages.
 Use the task ID from the user, issue, ticket, branch, or commit context.
 
 ```bash
-acs new srs --task TASK-123 --title "Feature requirements"
-acs new sdd --task TASK-123 --title "Feature system design"
-acs new adr --task TASK-123 --title "Feature architecture decision"
-acs new api --task TASK-123 --title "Feature API design"
-acs new test --task TASK-123 --title "Feature test plan"
+acs role explain dev --task TASK-123
+acs next --role sa --task TASK-123
+acs ba new srs --task TASK-123 --title "Feature requirements"
+acs sa new sdd --task TASK-123 --title "Feature system design"
+acs sa new adr --task TASK-123 --title "Feature architecture decision"
+acs sa new api-design --task TASK-123 --title "Feature API design"
+acs dev new implementation-note --task TASK-123
+acs qa new test-plan --task TASK-123 --title "Feature test plan"
 ```
 
 Update the generated Markdown files with concise, reviewable content and source references.
@@ -44,6 +48,8 @@ Check handoffs before using them:
 
 ```bash
 acs handoff check HOFF-TASK-123-BA-SA
+acs handoff check --from ba --to sa --task TASK-123
+acs handoff list --task TASK-123
 ```
 
 ## Context Packages
@@ -52,7 +58,7 @@ Generate a role-specific package before handing work to the next agent.
 
 ```bash
 acs package --task TASK-123 --role sa
-acs package --task TASK-123 --role dev
+acs dev package --task TASK-123
 acs package --task TASK-123 --role qa
 acs index
 ```

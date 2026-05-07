@@ -1,5 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import os from "node:os";
 import { makeTempDir, cleanupTempDir, exists, readText } from "./helpers.ts";
@@ -8,12 +9,16 @@ import {
   initContextStore,
   createArtifact,
   validateContextStore,
+  validatePolicyScope,
   createHandoff,
   checkHandoff,
   buildContextPackage,
   buildIndex,
   doctor,
   getStoreInfo,
+  listRoles,
+  explainRole,
+  getNextActions,
   type ArtifactType
 } from "../packages/core/dist/index.js";
 
@@ -28,16 +33,15 @@ describe("initContextStore — in-repo (default)", () => {
     await initContextStore({ rootDir: dir });
     for (const sub of [
       ".acs",
-      ".acs/artifacts/requirements",
-      ".acs/artifacts/design",
-      ".acs/artifacts/adr",
-      ".acs/artifacts/api",
-      ".acs/artifacts/test",
+      ".acs/artifacts",
       ".acs/handoffs",
       ".acs/summaries",
       ".acs/packages",
       ".acs/schemas",
       ".acs/templates",
+      ".acs/roles",
+      ".acs/artifact-types",
+      ".acs/workflows",
       ".acs/docs",
       ".acs/audit"
     ]) {
@@ -52,6 +56,15 @@ describe("initContextStore — in-repo (default)", () => {
     const index = JSON.parse(await readText(join(dir, ".acs/index.json")));
     assert.deepEqual(index.artifacts, []);
     assert.deepEqual(index.handoffs, []);
+  });
+
+  test("seeds role, artifact type, workflow, template, and schema policies", async () => {
+    assert.ok(exists(join(dir, ".acs/acs.yaml")));
+    assert.ok(exists(join(dir, ".acs/roles/ba.yaml")));
+    assert.ok(exists(join(dir, ".acs/artifact-types/implementation-note.yaml")));
+    assert.ok(exists(join(dir, ".acs/workflows/default-sdlc.yaml")));
+    assert.ok(exists(join(dir, ".acs/templates/implementation-note.md")));
+    assert.ok(exists(join(dir, ".acs/schemas/role.schema.json")));
   });
 
   test("is idempotent - second run does not throw", async () => {
@@ -82,16 +95,15 @@ describe("initContextStore — dedicated mode", () => {
   test("creates layout at root (no .acs/ prefix)", async () => {
     await initContextStore({ rootDir: dir, mode: "dedicated" });
     for (const sub of [
-      "artifacts/requirements",
-      "artifacts/design",
-      "artifacts/adr",
-      "artifacts/api",
-      "artifacts/test",
+      "artifacts",
       "handoffs",
       "summaries",
       "packages",
       "schemas",
       "templates",
+      "roles",
+      "artifact-types",
+      "workflows",
       "docs",
       "audit"
     ]) {
@@ -125,9 +137,10 @@ describe("initContextStore — local mode", () => {
   test("creates actual store layout in OS user-data directory", async () => {
     const info = await getStoreInfo(dir);
     assert.equal(info.mode, "local");
-    assert.ok(exists(join(info.storeDir, "artifacts/requirements")));
+    assert.ok(exists(join(info.storeDir, "artifacts")));
     assert.ok(exists(join(info.storeDir, "handoffs")));
     assert.ok(exists(join(info.storeDir, "config.yaml")));
+    assert.ok(exists(join(info.storeDir, "acs.yaml")));
     const config = await readText(join(info.storeDir, "config.yaml"));
     assert.ok(config.includes("mode: local"));
     assert.ok(config.includes("project_path:"));
@@ -182,7 +195,7 @@ describe("createArtifact", () => {
   });
   after(() => cleanupTempDir(dir));
 
-  const artifactTypes: ArtifactType[] = ["srs", "sdd", "adr", "api", "test"];
+  const artifactTypes: ArtifactType[] = ["srs", "sdd", "adr", "api", "test", "implementation-note", "test-plan"];
   for (const type of artifactTypes) {
     test(`creates ${type} artifact under .acs/`, async () => {
       const result = await createArtifact({ rootDir: dir, type, taskId: `TASK-${type.toUpperCase()}`, title: `Test ${type}` });
@@ -197,6 +210,53 @@ describe("createArtifact", () => {
       () => createArtifact({ rootDir: dir, type: "srs", taskId: "TASK-SRS", title: "Duplicate" }),
       /already exists/
     );
+  });
+
+  test("enforces role create permissions", async () => {
+    await assert.rejects(
+      () => createArtifact({ rootDir: dir, type: "srs", role: "dev", taskId: "TASK-ROLE", title: "Role error" }),
+      /not allowed to create/
+    );
+  });
+
+  test("canonicalizes api and test aliases", async () => {
+    const api = await createArtifact({ rootDir: dir, type: "api", taskId: "TASK-ALIAS-API", title: "Alias API" });
+    assert.ok(api.artifactPath.includes("artifacts/api-design/API-TASK-ALIAS-API.md"), api.artifactPath);
+    await assert.rejects(
+      () => createArtifact({ rootDir: dir, type: "api-design", taskId: "TASK-ALIAS-API", title: "Canonical API" }),
+      /already exists/
+    );
+
+    const testPlan = await createArtifact({ rootDir: dir, type: "test", taskId: "TASK-ALIAS-TEST", title: "Alias Test" });
+    assert.ok(testPlan.artifactPath.includes("artifacts/test-plan/TEST-TASK-ALIAS-TEST.md"), testPlan.artifactPath);
+    await assert.rejects(
+      () => createArtifact({ rootDir: dir, type: "test-plan", taskId: "TASK-ALIAS-TEST", title: "Canonical Test" }),
+      /already exists/
+    );
+  });
+});
+
+describe("role policy helpers", () => {
+  let dir: string;
+  before(async () => {
+    dir = makeTempDir("acs-core-policy-");
+    await initContextStore({ rootDir: dir });
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "TASK-POLICY", title: "Policy SRS" });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("lists roles and explains a role", async () => {
+    const roles = await listRoles(dir);
+    assert.ok(roles.some((role) => role.role === "dev"));
+    const explanation = await explainRole({ rootDir: dir, role: "dev", taskId: "TASK-POLICY" });
+    assert.equal(explanation.role, "dev");
+    assert.ok(explanation.suggestedCommands.some((command) => command.includes("implementation-note")));
+  });
+
+  test("returns next actions for a role", async () => {
+    const next = await getNextActions({ rootDir: dir, role: "sa", taskId: "TASK-POLICY" });
+    assert.equal(next.role, "sa");
+    assert.ok(next.suggestedOutputs.includes("sdd"));
   });
 });
 
@@ -224,6 +284,44 @@ describe("validateContextStore", () => {
     } finally {
       await cleanupTempDir(emptyDir);
     }
+  });
+
+  test("reports missing generated policy files", async () => {
+    const policyDir = makeTempDir("acs-core-policy-missing-");
+    try {
+      await initContextStore({ rootDir: policyDir });
+      await unlink(join(policyDir, ".acs/roles/ba.yaml"));
+      const result = await validateContextStore(policyDir);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((error) => error.includes("Missing policy file: roles/ba.yaml")));
+    } finally {
+      await cleanupTempDir(policyDir);
+    }
+  });
+
+  test("reports malformed generated policy documents", async () => {
+    const policyDir = makeTempDir("acs-core-policy-malformed-");
+    try {
+      await initContextStore({ rootDir: policyDir });
+      await writeFile(join(policyDir, ".acs/roles/ba.yaml"), "role: 123\n", "utf8");
+      const result = await validateContextStore(policyDir);
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((error) => error.includes(".acs/roles/ba.yaml: schema")));
+    } finally {
+      await cleanupTempDir(policyDir);
+    }
+  });
+
+  test("validates scoped role, task, and artifact inputs", async () => {
+    const artifact = await createArtifact({ rootDir: dir, type: "srs", taskId: "TASK-SCOPE", title: "Scoped SRS" });
+    const valid = await validatePolicyScope({ rootDir: dir, role: "ba", taskId: "TASK-SCOPE", artifactPath: artifact.artifactPath });
+    assert.equal(valid.valid, true, `Unexpected errors: ${valid.errors.join(", ")}`);
+
+    const invalid = await validatePolicyScope({ rootDir: dir, role: "not-a-role", taskId: "TASK-MISSING", artifactPath: ".acs/artifacts/missing.md" });
+    assert.equal(invalid.valid, false);
+    assert.ok(invalid.errors.some((error) => error.includes("Unknown role")));
+    assert.ok(invalid.errors.some((error) => error.includes("No artifacts found for task")));
+    assert.ok(invalid.errors.some((error) => error.includes("Artifact not found")));
   });
 });
 
@@ -271,6 +369,25 @@ describe("createHandoff", () => {
     assert.equal(check.valid, false);
     assert.ok(check.errors.length > 0);
   });
+
+  test("policy check enforces configured required_state", async () => {
+    const taskId = "TASK-DEV-QA";
+    const implementation = await createArtifact({ rootDir: dir, type: "implementation-note", role: "dev", taskId, title: "Implementation" });
+    const unit = await createArtifact({ rootDir: dir, type: "unit-test-note", role: "dev", taskId, title: "Unit Tests" });
+
+    const draftCheck = await checkHandoff({ rootDir: dir, fromRole: "dev", toRole: "qa", taskId });
+    assert.equal(draftCheck.valid, false);
+    assert.ok(draftCheck.errors.some((error) => error.includes("ready_for_review")));
+
+    for (const artifactPath of [implementation.artifactPath, unit.artifactPath]) {
+      const absolutePath = join(dir, artifactPath);
+      const content = await readText(absolutePath);
+      await writeFile(absolutePath, content.replace("status: draft", "status: ready_for_review"), "utf8");
+    }
+
+    const readyCheck = await checkHandoff({ rootDir: dir, fromRole: "dev", toRole: "qa", taskId });
+    assert.equal(readyCheck.valid, true, `Errors: ${readyCheck.errors.join(", ")}`);
+  });
 });
 
 // ─── buildContextPackage ──────────────────────────────────────────────────────
@@ -296,6 +413,13 @@ describe("buildContextPackage", () => {
     assert.ok(result.packagePath.endsWith(".json"));
     const json = JSON.parse(await readText(join(dir, result.packagePath)));
     assert.equal(json.task_id, "TASK-200");
+  });
+
+  test("rejects unknown package roles", async () => {
+    await assert.rejects(
+      () => buildContextPackage({ rootDir: dir, taskId: "TASK-200", role: "totallyfake" }),
+      /Unknown role/
+    );
   });
 });
 

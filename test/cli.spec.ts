@@ -171,12 +171,66 @@ describe("acs new", () => {
   test("creates an srs artifact under .acs/", () => {
     const r = runCli(["new", "srs", "--task", "TASK-CLI-01", "--title", "My Requirements"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".acs/artifacts/requirements/REQ-TASK-CLI-01.md")));
+    assert.ok(exists(join(dir, ".acs/artifacts/srs/SRS-TASK-CLI-01.md")));
+  });
+
+  test("role alias creates an implementation note", () => {
+    const r = runCli(["dev", "new", "implementation-note", "--task", "TASK-CLI-IMPL"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(dir, ".acs/artifacts/implementation-note/IMPL-TASK-CLI-IMPL.md")));
+  });
+
+  test("canonicalizes api and test aliases", () => {
+    const api = runCli(["new", "api", "--task", "TASK-CLI-API"], { cwd: dir });
+    assert.equal(api.status, 0, `stderr: ${api.stderr}`);
+    assert.ok(exists(join(dir, ".acs/artifacts/api-design/API-TASK-CLI-API.md")));
+
+    const apiDesign = runCli(["sa", "new", "api-design", "--task", "TASK-CLI-API"], { cwd: dir });
+    assert.notEqual(apiDesign.status, 0);
+
+    const testPlan = runCli(["new", "test", "--task", "TASK-CLI-TEST"], { cwd: dir });
+    assert.equal(testPlan.status, 0, `stderr: ${testPlan.stderr}`);
+    assert.ok(exists(join(dir, ".acs/artifacts/test-plan/TEST-TASK-CLI-TEST.md")));
   });
 
   test("unknown artifact type exits non-zero", () => {
     const r = runCli(["new", "bogus-type", "--task", "TASK-CLI-02"], { cwd: dir });
     assert.notEqual(r.status, 0);
+  });
+
+  test("disallowed role exits non-zero", () => {
+    const r = runCli(["dev", "new", "srs", "--task", "TASK-CLI-ROLE"], { cwd: dir });
+    assert.notEqual(r.status, 0);
+    assert.ok(r.stderr.includes("not allowed to create") || r.stdout.includes("not allowed to create"));
+  });
+});
+
+describe("acs roles, role explain, and next", () => {
+  let dir: string;
+  before(() => {
+    dir = makeTempDir("acs-cli-roles-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "TASK-R01", "--title", "Role SRS"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("roles lists configured roles", () => {
+    const r = runCli(["roles"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("ba"));
+    assert.ok(r.stdout.includes("dev"));
+  });
+
+  test("role explain prints suggested commands", () => {
+    const r = runCli(["role", "explain", "dev", "--task", "TASK-R01"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("implementation-note"));
+  });
+
+  test("next prints workflow outputs", () => {
+    const r = runCli(["next", "--role", "sa", "--task", "TASK-R01"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("sdd"));
   });
 });
 
@@ -196,6 +250,22 @@ describe("acs validate", () => {
     const r = runCli(["validate"], { cwd: dir });
     cleanupTempDir(dir);
     assert.notEqual(r.status, 0);
+  });
+
+  test("scoped validate checks role, task, and artifact flags", () => {
+    const dir = makeTempDir("acs-cli-validate-scope-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "TASK-V01", "--title", "Validate SRS"], { cwd: dir });
+
+    const valid = runCli(["validate", "--role", "ba", "--task", "TASK-V01", "--artifact", ".acs/artifacts/srs/SRS-TASK-V01.md"], { cwd: dir });
+    assert.equal(valid.status, 0, `stderr: ${valid.stderr}`);
+
+    const invalid = runCli(["validate", "--role", "fake", "--task", "TASK-MISSING", "--artifact", ".acs/artifacts/missing.md"], { cwd: dir });
+    cleanupTempDir(dir);
+    assert.notEqual(invalid.status, 0);
+    assert.ok(invalid.stdout.includes("Unknown role") || invalid.stderr.includes("Unknown role"));
+    assert.ok(invalid.stdout.includes("No artifacts found for task") || invalid.stderr.includes("No artifacts found for task"));
+    assert.ok(invalid.stdout.includes("Artifact not found") || invalid.stderr.includes("Artifact not found"));
   });
 });
 
@@ -223,7 +293,7 @@ describe("acs handoff", () => {
   test("create - creates handoff file under .acs/handoffs/", () => {
     const r = runCli(["handoff", "create", "--from", "sa", "--to", "dev", "--task", "TASK-H01"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".acs/handoffs/HOFF-TASK-H01-SA-DEV.yaml")));
+    assert.ok(exists(join(dir, ".acs/handoffs/TASK-H01/HOFF-TASK-H01-SA-DEV.yaml")));
   });
 
   test("check - exits 0 for existing handoff", () => {
@@ -232,13 +302,27 @@ describe("acs handoff", () => {
   });
 
   test("check - accepts the project-relative path returned by create", () => {
-    const r = runCli(["handoff", "check", ".acs/handoffs/HOFF-TASK-H01-SA-DEV.yaml"], { cwd: dir });
+    const r = runCli(["handoff", "check", ".acs/handoffs/TASK-H01/HOFF-TASK-H01-SA-DEV.yaml"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+  });
+
+  test("list - lists handoffs for task", () => {
+    const r = runCli(["handoff", "list", "--task", "TASK-H01"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("HOFF-TASK-H01-SA-DEV"));
   });
 
   test("check - exits non-zero for missing handoff", () => {
     const r = runCli(["handoff", "check", "HOFF-NONEXISTENT"], { cwd: dir });
     assert.notEqual(r.status, 0);
+  });
+
+  test("check - policy form enforces required state", () => {
+    runCli(["dev", "new", "implementation-note", "--task", "TASK-H02"], { cwd: dir });
+    runCli(["dev", "new", "unit-test-note", "--task", "TASK-H02"], { cwd: dir });
+    const r = runCli(["handoff", "check", "--from", "dev", "--to", "qa", "--task", "TASK-H02"], { cwd: dir });
+    assert.notEqual(r.status, 0);
+    assert.ok(r.stdout.includes("ready_for_review") || r.stderr.includes("ready_for_review"));
   });
 });
 
@@ -256,13 +340,25 @@ describe("acs package", () => {
   test("creates markdown package under .acs/packages/", () => {
     const r = runCli(["package", "--task", "TASK-P01", "--role", "dev"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".acs/packages/TASK-P01.dev.context.md")));
+    assert.ok(exists(join(dir, ".acs/packages/TASK-P01/dev.context.md")));
   });
 
   test("creates JSON package with --format json", () => {
     const r = runCli(["package", "--task", "TASK-P01", "--role", "dev", "--format", "json"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".acs/packages/TASK-P01.dev.context.json")));
+    assert.ok(exists(join(dir, ".acs/packages/TASK-P01/dev.context.json")));
+  });
+
+  test("role alias package command works", () => {
+    const r = runCli(["dev", "package", "--task", "TASK-P01"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(dir, ".acs/packages/TASK-P01/dev.context.md")));
+  });
+
+  test("unknown package role exits non-zero", () => {
+    const r = runCli(["package", "--task", "TASK-P01", "--role", "totallyfake"], { cwd: dir });
+    assert.notEqual(r.status, 0);
+    assert.ok(r.stderr.includes("Unknown role") || r.stdout.includes("Unknown role"));
   });
 });
 

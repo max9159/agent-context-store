@@ -29,13 +29,14 @@ packages/
       AGENTS.md
       CLAUDE.md
       skills/agent-context-store/SKILL.md  # shared skill, one copy for all agents
-  core/      # context store creation, validation, handoff, packaging logic
-schemas/    # JSON schemas copied into initialized context stores
-templates/  # Markdown templates copied into initialized context stores
+  core/      # policy-aware context store creation, validation, handoff, packaging logic
+schemas/    # source JSON schemas; defaults are also embedded into core for published installs
+templates/  # source Markdown templates; defaults are also embedded into core for published installs
 examples/   # usage examples
 ```
 
 The `agent-config/` directory is listed in `packages/cli/package.json` under `files` so it is included in every npm publish. The installer uses an upward path search from the compiled `dist/index.js` to locate it at runtime, which works both in the local source tree and after a global npm install.
+The core package seeds `.acs/acs.yaml`, `roles/`, `artifact-types/`, `workflows/`, `schemas/`, and `templates/` during `acs init`. Default policy/schema/template text is embedded in `packages/core/dist` so initialization does not depend on source-tree assets after publish.
 
 ## Local CLI Usage
 
@@ -59,8 +60,11 @@ cd tmp/demo
 
 node ../../packages/cli/dist/index.js init
 node ../../packages/cli/dist/index.js status
-node ../../packages/cli/dist/index.js new srs --task DEMO-0001 --title "Login with OTP"
-node ../../packages/cli/dist/index.js validate
+node ../../packages/cli/dist/index.js roles
+node ../../packages/cli/dist/index.js ba new srs --task DEMO-0001 --title "Login with OTP"
+node ../../packages/cli/dist/index.js role explain dev --task DEMO-0001
+node ../../packages/cli/dist/index.js next --role sa --task DEMO-0001
+node ../../packages/cli/dist/index.js validate --role ba --task DEMO-0001
 node ../../packages/cli/dist/index.js handoff create --from ba --to sa --task DEMO-0001
 node ../../packages/cli/dist/index.js handoff check HOFF-DEMO-0001-BA-SA
 node ../../packages/cli/dist/index.js package --task DEMO-0001 --role sa
@@ -83,10 +87,10 @@ Tests run against the **compiled output** in `packages/cli/dist` and `packages/c
 
 ```text
 test/
-  helpers.js              # shared utilities: makeTempDir, runCli, exists, readText …
-  core.test.js            # unit tests importing from packages/core/dist
-  cli.test.js             # behavioral tests spawning the compiled CLI binary
-  install-skills.test.js  # install-skills command tests (agents, append/replace, alias)
+  helpers.ts              # shared utilities: makeTempDir, runCli, exists, readText …
+  core.spec.ts            # unit tests importing from packages/core/dist
+  cli.spec.ts             # behavioral tests spawning the compiled CLI binary
+  install-skills.spec.ts  # install-skills command tests (agents, append/replace, alias)
 ```
 
 ### Isolation

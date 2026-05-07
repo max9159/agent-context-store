@@ -14,6 +14,7 @@ Run from the project root (or context store root for dedicated mode):
 ```bash
 acs status
 acs doctor
+acs roles
 ```
 
 If validation fails, report the errors before creating handoffs or packages.
@@ -23,11 +24,14 @@ If validation fails, report the errors before creating handoffs or packages.
 Use a stable task ID from the ticket, branch, issue, or user request.
 
 ```bash
-acs new srs --task TASK-123 --title "Feature requirements"
-acs new sdd --task TASK-123 --title "Feature system design"
-acs new adr --task TASK-123 --title "Feature architecture decision"
-acs new api --task TASK-123 --title "Feature API design"
-acs new test --task TASK-123 --title "Feature test plan"
+acs role explain dev --task TASK-123
+acs next --role sa --task TASK-123
+acs ba new srs --task TASK-123 --title "Feature requirements"
+acs sa new sdd --task TASK-123 --title "Feature system design"
+acs sa new adr --task TASK-123 --title "Feature architecture decision"
+acs sa new api-design --task TASK-123 --title "Feature API design"
+acs dev new implementation-note --task TASK-123
+acs qa new test-plan --task TASK-123 --title "Feature test plan"
 ```
 
 Edit the generated Markdown files with the actual requirements, decisions, source references, risks, and test scope.
@@ -44,6 +48,8 @@ Check a handoff before relying on it:
 
 ```bash
 acs handoff check HOFF-TASK-123-BA-SA
+acs handoff check --from ba --to sa --task TASK-123
+acs handoff list --task TASK-123
 ```
 
 ## Package Context
@@ -52,7 +58,7 @@ Generate role-specific context before passing work to another agent:
 
 ```bash
 acs package --task TASK-123 --role sa
-acs package --task TASK-123 --role dev
+acs dev package --task TASK-123
 acs package --task TASK-123 --role qa
 acs index
 ```

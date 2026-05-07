@@ -11,9 +11,13 @@ import {
   createArtifact,
   createHandoff,
   doctor,
+  explainRole,
+  getNextActions,
   getStoreInfo,
   initContextStore,
-  type ArtifactType,
+  listHandoffs,
+  listRoles,
+  validatePolicyScope,
   type StoreMode
 } from "agent-context-store-core";
 
@@ -22,7 +26,6 @@ interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
-const artifactTypes = new Set(["srs", "sdd", "adr", "api", "test"]);
 const validModes: StoreMode[] = ["in-repo", "local", "dedicated"];
 
 const require = createRequire(import.meta.url);
@@ -68,6 +71,11 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (await isRoleCommand(command)) {
+    await handleRoleCommand(command, rest);
+    return;
+  }
+
   if (command === "init") {
     const args = parseArgs(rest);
     const rootDir = String(args.positional[0] ?? args.flags["path"] ?? process.cwd());
@@ -88,6 +96,7 @@ async function main(argv: string[]): Promise<void> {
     const info = await getStoreInfo(process.cwd());
     console.log(`mode        ${info.mode}`);
     console.log(`store       ${info.storeDir}`);
+    console.log(`policy      ${info.policyPath ?? "unknown"}`);
     console.log(`initialized ${info.initialized ? "yes" : "no"}`);
     console.log(`config      ${info.configPresent ? "yes" : "no"}`);
     console.log(`schemas     ${info.schemasPresent ? "yes" : "no"}`);
@@ -101,25 +110,27 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "new") {
-    const [type, ...tail] = rest;
-    if (!artifactTypes.has(type)) {
-      throw new Error(`Unknown artifact type "${type}". Expected one of: ${[...artifactTypes].join(", ")}`);
-    }
-    const args = parseArgs(tail);
-    const taskId = requireFlag(args, "task");
-    const title = getStringFlag(args, "title");
-    const result = await createArtifact({
-      rootDir: process.cwd(),
-      type: type as ArtifactType,
-      taskId,
-      title
-    });
-    printResult(`Created artifact ${result.artifactId}`, result);
+    await handleNewArtifact(rest);
     return;
   }
 
   if (command === "validate") {
-    const validation = await doctor(process.cwd());
+    const args = parseArgs(rest);
+    const role = getStringFlag(args, "role");
+    const taskId = getStringFlag(args, "task");
+    const artifact = getStringFlag(args, "artifact");
+    const validation = role || taskId || artifact
+      ? await validatePolicyScope({ rootDir: process.cwd(), role, taskId, artifactPath: artifact })
+      : await doctor(process.cwd());
+    if (role) {
+      console.log(`role ${role}`);
+    }
+    if (taskId) {
+      console.log(`task ${taskId}`);
+    }
+    if (artifact) {
+      console.log(`artifact ${artifact}`);
+    }
     printValidation(validation);
     if (!validation.valid) {
       process.exitCode = 1;
@@ -133,12 +144,33 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "package") {
+    await handlePackage(rest);
+    return;
+  }
+
+  if (command === "roles") {
+    const roles = await listRoles(process.cwd());
+    for (const role of roles) {
+      console.log(`${role.role}\t${role.displayName}`);
+    }
+    return;
+  }
+
+  if (command === "role") {
+    const [action, role, ...tail] = rest;
+    if (action !== "explain" || !role) {
+      throw new Error('Unknown role action. Expected "role explain <ROLE>".');
+    }
+    const args = parseArgs(tail);
+    printRoleExplanation(await explainRole({ rootDir: process.cwd(), role, taskId: getStringFlag(args, "task") }));
+    return;
+  }
+
+  if (command === "next") {
     const args = parseArgs(rest);
-    const taskId = requireFlag(args, "task");
     const role = requireFlag(args, "role");
-    const format = getStringFlag(args, "format") === "json" ? "json" : "markdown";
-    const result = await buildContextPackage({ rootDir: process.cwd(), taskId, role, format });
-    printResult(`Built context package ${result.packagePath}`, result);
+    const taskId = requireFlag(args, "task");
+    printNextActions(await getNextActions({ rootDir: process.cwd(), role, taskId }));
     return;
   }
 
@@ -231,6 +263,58 @@ async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ 
   return result;
 }
 
+async function isRoleCommand(command: string): Promise<boolean> {
+  const roles = await listRoles(process.cwd());
+  return roles.some((role) => role.role === command) || ["developer", "reviewer"].includes(command);
+}
+
+async function handleRoleCommand(role: string, rest: string[]): Promise<void> {
+  const [action, ...tail] = rest;
+  if (action === "new") {
+    await handleNewArtifact([...tail, "--role", role]);
+    return;
+  }
+  if (action === "package") {
+    await handlePackage([...tail, "--role", role]);
+    return;
+  }
+  if (action === "next") {
+    const args = parseArgs([...tail, "--role", role]);
+    const taskId = requireFlag(args, "task");
+    printNextActions(await getNextActions({ rootDir: process.cwd(), role, taskId }));
+    return;
+  }
+  throw new Error(`Unknown role command "${role} ${action ?? ""}". Expected new, package, or next.`);
+}
+
+async function handleNewArtifact(rest: string[]): Promise<void> {
+  const [type, ...tail] = rest;
+  if (!type) {
+    throw new Error("Missing artifact type. Example: acs new srs --task TASK-123");
+  }
+  const args = parseArgs(tail);
+  const taskId = requireFlag(args, "task");
+  const title = getStringFlag(args, "title");
+  const role = getStringFlag(args, "role");
+  const result = await createArtifact({
+    rootDir: process.cwd(),
+    type,
+    taskId,
+    title,
+    role
+  });
+  printResult(`Created artifact ${result.artifactId}`, result);
+}
+
+async function handlePackage(rest: string[]): Promise<void> {
+  const args = parseArgs(rest);
+  const taskId = requireFlag(args, "task");
+  const role = requireFlag(args, "role");
+  const format = getStringFlag(args, "format") === "json" ? "json" : "markdown";
+  const result = await buildContextPackage({ rootDir: process.cwd(), taskId, role, format });
+  printResult(`Built context package ${result.packagePath}`, result);
+}
+
 function uniqueConfigFiles(files: AgentConfigFile[]): AgentConfigFile[] {
   const byTarget = new Map<string, AgentConfigFile>();
   for (const file of files) {
@@ -268,9 +352,20 @@ async function handleHandoff(rest: string[]): Promise<void> {
 
   if (action === "check") {
     const args = parseArgs(tail);
+    const fromRole = getStringFlag(args, "from");
+    const toRole = getStringFlag(args, "to");
+    const taskId = getStringFlag(args, "task");
+    if (fromRole && toRole && taskId) {
+      const validation = await checkHandoff({ rootDir: process.cwd(), fromRole, toRole, taskId });
+      printValidation(validation);
+      if (!validation.valid) {
+        process.exitCode = 1;
+      }
+      return;
+    }
     const handoffRef = args.positional[0] ?? getStringFlag(args, "id");
     if (!handoffRef) {
-      throw new Error("Missing handoff id or path. Example: acs handoff check HOFF-DEMO-0001-BA-SA");
+      throw new Error("Missing handoff id/path or --from --to --task. Example: acs handoff check HOFF-DEMO-0001-BA-SA");
     }
     const validation = await checkHandoff(process.cwd(), String(handoffRef));
     printValidation(validation);
@@ -280,7 +375,20 @@ async function handleHandoff(rest: string[]): Promise<void> {
     return;
   }
 
-  throw new Error('Unknown handoff action. Expected "create" or "check".');
+  if (action === "list") {
+    const args = parseArgs(tail);
+    const handoffs = await listHandoffs({
+      rootDir: process.cwd(),
+      taskId: getStringFlag(args, "task"),
+      role: getStringFlag(args, "role")
+    });
+    for (const handoff of handoffs) {
+      console.log(handoff);
+    }
+    return;
+  }
+
+  throw new Error('Unknown handoff action. Expected "create", "check", or "list".');
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -347,6 +455,76 @@ function printValidation(validation: { valid: boolean; errors: string[]; warning
   }
 }
 
+function printRoleExplanation(explanation: {
+  role: string;
+  displayName: string;
+  canCreate: string[];
+  canRead: string[];
+  canUpdate: string[];
+  handoffTargets: string[];
+  packageInclude: string[];
+  taskId?: string;
+  requiredInputs?: string[];
+  suggestedCommands: string[];
+}): void {
+  if (explanation.taskId) {
+    console.log(`Task: ${explanation.taskId}`);
+  }
+  console.log(`Role: ${explanation.role}`);
+  console.log(`Display: ${explanation.displayName}`);
+  console.log("Can create:");
+  for (const type of explanation.canCreate) {
+    console.log(`- ${type}`);
+  }
+  console.log("Can read:");
+  for (const type of explanation.canRead) {
+    console.log(`- ${type}`);
+  }
+  if (explanation.requiredInputs && explanation.requiredInputs.length > 0) {
+    console.log("Required input artifacts:");
+    for (const type of explanation.requiredInputs) {
+      console.log(`- ${type}`);
+    }
+  }
+  console.log("Handoff targets:");
+  for (const target of explanation.handoffTargets) {
+    console.log(`- ${target}`);
+  }
+  console.log("Suggested commands:");
+  for (const command of explanation.suggestedCommands) {
+    console.log(`- ${command}`);
+  }
+}
+
+function printNextActions(next: {
+  role: string;
+  taskId: string;
+  currentStage?: string;
+  requiredInputs: Array<{ type: string; found: boolean }>;
+  suggestedOutputs: string[];
+  suggestedCommands: string[];
+}): void {
+  console.log(`Task: ${next.taskId}`);
+  console.log(`Role: ${next.role}`);
+  if (next.currentStage) {
+    console.log(`Current stage: ${next.currentStage}`);
+  }
+  if (next.requiredInputs.length > 0) {
+    console.log("Required inputs:");
+    for (const input of next.requiredInputs) {
+      console.log(`- ${input.type}: ${input.found ? "found" : "missing"}`);
+    }
+  }
+  console.log("Suggested outputs:");
+  for (const output of next.suggestedOutputs) {
+    console.log(`- ${output}`);
+  }
+  console.log("Suggested commands:");
+  for (const command of next.suggestedCommands) {
+    console.log(`- ${command}`);
+  }
+}
+
 function printHelp(): void {
   console.log(`Agent Context Store Toolkit
 
@@ -355,11 +533,18 @@ Usage:
   acs init [path] [--mode <in-repo|local|dedicated>]
   acs status
   acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
-  acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]
-  acs validate
+  acs roles
+  acs role explain <ROLE> [--task <TASK_ID>]
+  acs new <ARTIFACT_TYPE> [--role <ROLE>] --task <TASK_ID> [--title <TITLE>]
+  acs <ROLE> new <ARTIFACT_TYPE> --task <TASK_ID> [--title <TITLE>]
+  acs next --role <ROLE> --task <TASK_ID>
+  acs validate [--role <ROLE>] [--task <TASK_ID>] [--artifact <PATH>]
   acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>
   acs handoff check <HANDOFF_ID_OR_PATH>
+  acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
+  acs handoff list [--task <TASK_ID>] [--role <ROLE>]
   acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
+  acs <ROLE> package --task <TASK_ID> [--format markdown|json]
   acs index
   acs doctor
 
@@ -378,6 +563,9 @@ Examples:
   acs install-skills --agent claude
   acs install-skills --agent all --path D:\\my-repo
   acs new srs --task DEMO-0001 --title "Login with OTP"
+  acs ba new srs --task DEMO-0001
+  acs role explain dev --task DEMO-0001
+  acs next --role sa --task DEMO-0001
   acs handoff create --from ba --to sa --task DEMO-0001
   acs package --task DEMO-0001 --role sa
 `);

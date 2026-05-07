@@ -16,10 +16,7 @@
   ],
   "properties": {
     "id": { "type": "string" },
-    "type": {
-      "type": "string",
-      "enum": ["srs", "sdd", "adr", "api", "test"]
-    },
+    "type": { "type": "string" },
     "title": { "type": "string" },
     "owner": { "type": "string" },
     "status": {
