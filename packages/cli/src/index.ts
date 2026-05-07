@@ -13,7 +13,7 @@ import {
   doctor,
   initContextStore,
   type ArtifactType
-} from "@agent-context-store/core";
+} from "agent-context-store-core";
 
 interface ParsedArgs {
   positional: string[];

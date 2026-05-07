@@ -1,16 +1,22 @@
 {
-  "name": "@agent-context-store/core",
+  "name": "agent-context-store-core",
   "version": "0.1.0",
   "description": "Core library for Agent Context Store Toolkit.",
   "type": "module",
   "license": "MIT",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"

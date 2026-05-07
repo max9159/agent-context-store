@@ -13,10 +13,13 @@
     "dist",
     "agent-config"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@agent-context-store/core": "workspace:*"
+    "agent-context-store-core": "workspace:*"
   }
 }
