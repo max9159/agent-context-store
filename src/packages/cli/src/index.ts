@@ -41,20 +41,28 @@ interface AgentConfigFile {
   mode: "append" | "replace";
 }
 
-const SHARED_SKILL_SOURCE = "skills/agent-context-store/SKILL.md";
+const ROLE_SKILLS = ["agent-context-store", "acs-ba", "acs-sa", "acs-dev", "acs-qa"] as const;
+
+function roleSkillFiles(prefix: string): AgentConfigFile[] {
+  return ROLE_SKILLS.map(skill => ({
+    source: `skills/${skill}/SKILL.md`,
+    target: `${prefix}/skills/${skill}/SKILL.md`,
+    mode: "replace" as const
+  }));
+}
 
 const agentConfigFilesByAgent: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
   cursor: [
     { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    { source: SHARED_SKILL_SOURCE, target: ".cursor/skills/agent-context-store/SKILL.md", mode: "replace" }
+    ...roleSkillFiles(".cursor")
   ],
   claude: [
     { source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" },
-    { source: SHARED_SKILL_SOURCE, target: ".claude/skills/agent-context-store/SKILL.md", mode: "replace" }
+    ...roleSkillFiles(".claude")
   ],
   codex: [
     { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    { source: SHARED_SKILL_SOURCE, target: ".agents/skills/agent-context-store/SKILL.md", mode: "replace" }
+    ...roleSkillFiles(".agents")
   ]
 };
 

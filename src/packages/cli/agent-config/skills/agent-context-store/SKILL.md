@@ -1,15 +1,21 @@
 ---
 name: agent-context-store
-description: Create and validate Agent Context Store artifacts, handoffs, and role-specific context packages with the acs CLI. Use when the user asks for durable agent context, SDLC artifacts, requirements/design/test handoff, context packages, or agent-to-agent handoff workflow.
+description: ACS store setup, health checks, and role discovery. Use when initialising the store, checking store status, or when the role for the current task is not yet determined. For role-specific work use the acs-ba, acs-sa, acs-dev, or acs-qa skills instead.
 ---
 
-# Agent Context Store CLI
+# Agent Context Store — Setup & Health
 
-Use `acs` to make agent work durable and reviewable.
+Use `acs` to make agent work durable and reviewable across roles and sessions.
 
-## Check The Store
+## Store Setup
 
-Run from the project root (or context store root for dedicated mode):
+```bash
+acs init                        # in-repo mode (default)
+acs init --mode local           # local user-data mode
+acs init --mode dedicated       # dedicated store repo
+```
+
+## Health Checks
 
 ```bash
 acs status
@@ -17,110 +23,30 @@ acs doctor
 acs roles
 ```
 
-If validation fails, report the errors before creating handoffs or packages.
+Fix any errors before creating artifacts or handoffs.
 
-## Create Task Artifacts
+## Determine the Right Role
 
-Use a stable task ID from the ticket, branch, issue, or user request.
+If the task role is not yet clear, run:
 
 ```bash
-acs role explain dev --task TASK-123
-acs next --role sa --task TASK-123
-acs ba new srs --task TASK-123 --title "Feature requirements"
-acs sa new sdd --task TASK-123 --title "Feature system design"
-acs sa new adr --task TASK-123 --title "Feature architecture decision"
-acs sa new api-design --task TASK-123 --title "Feature API design"
-acs dev new implementation-note --task TASK-123
-acs qa new test-plan --task TASK-123 --title "Feature test plan"
+acs next --role <ba|sa|dev|qa> --task TASK-123
+acs role explain <role> --task TASK-123
 ```
 
-### Fill Content (mandatory — do this immediately after each `acs new`)
+Then switch to the matching role skill:
 
-After the CLI prints the generated file path, **you must fill in all sections yourself** before moving to the next step. Do not leave placeholder text.
+| Role | Skill to use |
+|------|-------------|
+| Business Analyst | `acs-ba` |
+| Solution Architect | `acs-sa` |
+| Developer | `acs-dev` |
+| QA | `acs-qa` |
 
-For each section:
-- Write concrete content based on the current conversation, user requirements, and relevant source files you have read.
-- List every file path or document you consulted under `source_refs` in the frontmatter.
-- Replace every placeholder line (e.g. "Describe the...", "None yet.", `- R001:`) with real content.
-- Complete the Validation Checklist at the end of the file — check each item only when it is actually satisfied.
-
-Do not proceed to handoff or packaging until all artifact sections contain real content and `acs validate` passes.
-
-## Create Handoffs
+## Store Maintenance
 
 ```bash
-acs handoff create --from ba --to sa --task TASK-123
-acs handoff create --from sa --to dev --task TASK-123
-acs handoff create --from dev --to qa --task TASK-123
-```
-
-Check a handoff before relying on it:
-
-```bash
-acs handoff check HOFF-TASK-123-BA-SA
-acs handoff check --from ba --to sa --task TASK-123
+acs validate
+acs index
 acs handoff list --task TASK-123
 ```
-
-## Package Context
-
-Generate role-specific context before passing work to another agent:
-
-```bash
-acs package --task TASK-123 --role sa
-acs dev package --task TASK-123
-acs package --task TASK-123 --role qa
-acs index
-```
-
-Use `acs package --task TASK-123 --role dev --format json` for automation.
-
-## Completion Checklist
-
-- Run `acs validate`.
-- Run `acs index` after changing artifacts or handoffs.
-- Report created or updated artifact, handoff, and package paths.
-- Call out open questions and validation warnings.
-
-## Handoff to Next Agent (mandatory when role work is complete)
-
-After validation passes, always create the handoff and package context for the receiving role — do not stop at `acs validate`. This applies to every role transition in the workflow:
-
-| Completing role | Receiving role | Handoff command |
-|-----------------|----------------|-----------------|
-| BA              | SA             | `acs handoff create --from ba --to sa --task TASK-123` |
-| SA              | DEV            | `acs handoff create --from sa --to dev --task TASK-123` |
-| DEV             | QA             | `acs handoff create --from dev --to qa --task TASK-123` |
-
-Run for whichever transition applies (replace `<FROM>` and `<TO>` with the actual roles):
-
-```bash
-acs handoff create --from <FROM> --to <TO> --task TASK-123
-acs package --task TASK-123 --role <TO>
-acs index
-```
-
-Then output a **handoff prompt** the next agent can use as their opening message:
-
-```
-[HANDOFF: <FROM> → <TO> | TASK-123]
-
-The <FROM> role has completed its work for TASK-123.
-
-Artifacts ready for you:
-- <paths to artifacts created by the completing role>
-
-Context package: <path printed by acs package>
-
-Your next steps (<TO> role):
-1. Read the context package above.
-2. Run: acs role explain <TO> --task TASK-123
-3. Create your artifact: acs <TO> new <artifact-type> --task TASK-123
-4. Fill all sections, then validate: acs validate
-5. When done, create handoff to the next role: acs handoff create --from <TO> --to <NEXT> --task TASK-123
-
-Open questions from <FROM> (must be resolved before or during your work):
-- <list any open questions from the completed artifact>
-```
-
-Fill in all placeholders — `<FROM>`, `<TO>`, `<NEXT>`, artifact paths, and open questions — from the actual task context.
