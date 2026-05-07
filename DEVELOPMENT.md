@@ -77,25 +77,45 @@ This creates artifacts under `.acs/` (in-repo mode). Pass `--mode dedicated` to 
 The test suite uses Node's built-in `node:test` runner — no additional framework is required.
 
 ```bash
-pnpm test      # build all packages, then run all tests
-pnpm check     # alias for pnpm test
+pnpm test                # build all packages, then run unit + integration specs
+pnpm test:integration    # build, then run only the scenario integration tests
+pnpm test:e2e            # build, npm-pack both packages, install from tarball, run smoke
+pnpm test:coverage       # build, then run unit + integration with coverage report
+pnpm check               # alias for pnpm test
 ```
 
-Tests run against the **compiled output** in `packages/cli/dist` and `packages/core/dist`. The build step is included in `pnpm test`, so you do not need to run `pnpm build` separately.
+Tests run against the **compiled output** in `packages/cli/dist` and `packages/core/dist`. The build step is included in every `pnpm test*` command, so you do not need to run `pnpm build` separately.
 
 ### Test Layout
 
 ```text
 test/
-  helpers.ts              # shared utilities: makeTempDir, runCli, exists, readText …
-  core.spec.ts            # unit tests importing from packages/core/dist
-  cli.spec.ts             # behavioral tests spawning the compiled CLI binary
+  helpers.ts              # shared utilities: makeTempDir, runCli, exists, readText,
+  |                       #   readJson, withTempProject, isolatedEnv, initStore
+  core.spec.ts            # core API tests — import packages/core/dist directly
+  cli.spec.ts             # CLI command tests — spawn the compiled binary per command
   install-skills.spec.ts  # install-skills command tests (agents, append/replace, alias)
+  integration.spec.ts     # scenario tests — full SDLC, mode variants, role enforcement,
+  |                       #   local-mode isolation, idempotency, error guards
+  e2e/
+    pack.spec.ts          # e2e pack smoke — pnpm pack → npm install → run installed acs
 ```
 
-### Isolation
+### Test Tiers
 
-Each test suite creates isolated temporary directories under the OS temp folder (`os.tmpdir()`). These directories are removed after each suite so no test output is left in the workspace.
+| Script | Scope | Speed | When to run |
+|---|---|---|---|
+| `pnpm test` | core API + CLI commands + scenarios | ~30 s | every PR / before commit |
+| `pnpm test:integration` | scenario tests only | ~15 s | iterating on a specific feature |
+| `pnpm test:e2e` | npm pack + install from tarball | ~60 s | before publish |
+| `pnpm test:coverage` | unit + integration with coverage | ~35 s | optional quality check |
+
+### Isolation Strategy
+
+All tests use one of two isolation patterns:
+
+- **Temp directory isolation** — `makeTempDir` creates a uniquely-named directory under `os.tmpdir()`. Each test suite's `after` hook removes it with `cleanupTempDir`.
+- **Env isolation for local mode** — `isolatedEnv(dir)` returns a `process.env` copy with `APPDATA`/`HOME`/`XDG_DATA_HOME` pointing to a throw-away directory. Pass it to `runCli(..., { env: isolatedEnv(dir) })` so local-mode tests never write to the real user profile.
 
 If a test run is interrupted, orphaned temp directories may remain in the OS temp folder. They are safe to delete manually; they follow the naming pattern `acs-*`.
 
