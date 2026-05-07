@@ -54,7 +54,7 @@ const agentConfigFilesByAgent: Record<Exclude<AgentName, "openclaw" | "all">, Ag
   ],
   codex: [
     { source: "AGENTS.md", target: "AGENTS.md", mode: "append" },
-    { source: SHARED_SKILL_SOURCE, target: ".agent/skills/agent-context-store/SKILL.md", mode: "replace" }
+    { source: SHARED_SKILL_SOURCE, target: ".agents/skills/agent-context-store/SKILL.md", mode: "replace" }
   ]
 };
 

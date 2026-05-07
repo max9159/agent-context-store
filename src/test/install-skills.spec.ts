@@ -64,7 +64,7 @@ describe("install-skills --agent codex", () => {
     const r = runCli(["install-skills", "--agent", "codex"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(exists(join(dir, "AGENTS.md")), "AGENTS.md missing");
-    assert.ok(exists(join(dir, ".agent/skills/agent-context-store/SKILL.md")), "SKILL.md missing");
+    assert.ok(exists(join(dir, ".agents/skills/agent-context-store/SKILL.md")), "SKILL.md missing");
   });
 });
 
@@ -91,7 +91,7 @@ describe("install-skills --agent all", () => {
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(exists(join(dir, ".cursor/skills/agent-context-store/SKILL.md")));
     assert.ok(exists(join(dir, ".claude/skills/agent-context-store/SKILL.md")));
-    assert.ok(exists(join(dir, ".agent/skills/agent-context-store/SKILL.md")));
+    assert.ok(exists(join(dir, ".agents/skills/agent-context-store/SKILL.md")));
   });
 
   test("AGENTS.md is appended only once for a single run", async () => {
