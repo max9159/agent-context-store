@@ -1,0 +1,15 @@
+---
+description: Routes common workflow requests to explicit project skills.
+alwaysApply: true
+---
+
+# Workflow Routing
+
+Prefer explicit project skills for specialized workflows:
+
+- For architecture, feature design, workflow design, or mode/API design, use `.cursor/skills/system-design/SKILL.md`.
+- For reviewing a plan or design before implementation, use `.cursor/skills/design-review/SKILL.md`.
+- For implementing an approved plan, use `.cursor/skills/develop-by-plan/SKILL.md`.
+- For reviewing staged changes, implementation quality, regressions, tests, or plan fulfillment, use `.cursor/skills/code-review/SKILL.md`.
+
+Keep this rule as routing guidance only. Load the matching skill for the detailed workflow.
