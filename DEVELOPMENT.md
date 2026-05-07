@@ -58,12 +58,15 @@ mkdir tmp/demo
 cd tmp/demo
 
 node ../../packages/cli/dist/index.js init
+node ../../packages/cli/dist/index.js status
 node ../../packages/cli/dist/index.js new srs --task DEMO-0001 --title "Login with OTP"
 node ../../packages/cli/dist/index.js validate
 node ../../packages/cli/dist/index.js handoff create --from ba --to sa --task DEMO-0001
 node ../../packages/cli/dist/index.js handoff check HOFF-DEMO-0001-BA-SA
 node ../../packages/cli/dist/index.js package --task DEMO-0001 --role sa
 ```
+
+This creates artifacts under `.acs/` (in-repo mode). Pass `--mode dedicated` to init if you want to use the folder as a standalone store.
 
 ## Running Tests
 

@@ -4,16 +4,16 @@ Use Agent Context Store (`acs`) for durable project context, SDLC artifacts, and
 
 ## Scope
 
-- Treat this repository as the context store or as the project repository that owns `.context-store/`.
-- Write durable work context to `artifacts/`, `handoffs/`, `summaries/`, and `packages/`.
+- Treat this repository as the context store, or as the project that owns `.acs/` (in-repo mode).
+- Write durable work context using `acs new`, `acs handoff`, and `acs package` — do not write to artifact directories directly.
 - Do not rely on hidden chat memory for requirements, design decisions, approvals, or handoffs.
 - Commit context store changes when the user asks you to persist or hand off work.
 
 ## Before Work
 
 ```bash
+acs status
 acs doctor
-acs validate
 ```
 
 If validation fails, report the issue before creating new handoffs or packages.

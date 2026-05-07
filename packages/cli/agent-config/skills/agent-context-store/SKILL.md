@@ -9,11 +9,11 @@ Use `acs` to make agent work durable and reviewable.
 
 ## Check The Store
 
-Run from the context store root or project root:
+Run from the project root (or context store root for dedicated mode):
 
 ```bash
+acs status
 acs doctor
-acs validate
 ```
 
 If validation fails, report the errors before creating handoffs or packages.

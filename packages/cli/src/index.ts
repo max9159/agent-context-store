@@ -11,8 +11,10 @@ import {
   createArtifact,
   createHandoff,
   doctor,
+  getStoreInfo,
   initContextStore,
-  type ArtifactType
+  type ArtifactType,
+  type StoreMode
 } from "agent-context-store-core";
 
 interface ParsedArgs {
@@ -21,6 +23,7 @@ interface ParsedArgs {
 }
 
 const artifactTypes = new Set(["srs", "sdd", "adr", "api", "test"]);
+const validModes: StoreMode[] = ["in-repo", "local", "dedicated"];
 
 const require = createRequire(import.meta.url);
 const cliPackage = require("../package.json") as { version?: string };
@@ -68,8 +71,32 @@ async function main(argv: string[]): Promise<void> {
   if (command === "init") {
     const args = parseArgs(rest);
     const rootDir = String(args.positional[0] ?? args.flags["path"] ?? process.cwd());
-    const result = await initContextStore({ rootDir });
-    printResult("Initialized context store", result);
+    const modeArg = getStringFlag(args, "mode");
+    if (modeArg && !(validModes as string[]).includes(modeArg)) {
+      console.error(`ERROR Unknown mode "${modeArg}". Expected one of: ${validModes.join(", ")}`);
+      process.exitCode = 1;
+      return;
+    }
+    const mode = modeArg as StoreMode | undefined;
+    const result = await initContextStore({ rootDir, mode });
+    const label = mode ? `Initialized context store (mode: ${mode})` : "Initialized context store";
+    printResult(label, result);
+    return;
+  }
+
+  if (command === "status") {
+    const info = await getStoreInfo(process.cwd());
+    console.log(`mode        ${info.mode}`);
+    console.log(`store       ${info.storeDir}`);
+    console.log(`initialized ${info.initialized ? "yes" : "no"}`);
+    console.log(`config      ${info.configPresent ? "yes" : "no"}`);
+    console.log(`schemas     ${info.schemasPresent ? "yes" : "no"}`);
+    if (info.initialized) {
+      const validation = await doctor(process.cwd());
+      console.log(`artifacts   ${validation.artifacts.length}`);
+      console.log(`handoffs    ${validation.handoffs.length}`);
+      console.log(`valid       ${validation.valid ? "yes" : "no"}`);
+    }
     return;
   }
 
@@ -325,7 +352,8 @@ function printHelp(): void {
 
 Usage:
   acs --version
-  acs init [path]
+  acs init [path] [--mode <in-repo|local|dedicated>]
+  acs status
   acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
   acs new <srs|sdd|adr|api|test> --task <TASK_ID> [--title <TITLE>]
   acs validate
@@ -335,9 +363,17 @@ Usage:
   acs index
   acs doctor
 
+Modes (--mode):
+  in-repo     Store context in .acs/ inside this project (default)
+  local       Store context in OS user-data dir, no repo changes
+  dedicated   This directory IS the context store root
+
 Examples:
-  acs --version
-  acs init
+  acs init                                       # in-repo: creates .acs/ in current dir
+  acs init --mode in-repo                        # same as above
+  acs init --mode local                          # local: store in user data dir
+  acs init --mode dedicated /path/to/store-repo  # dedicated store repo
+  acs status
   acs install-skills --agent cursor
   acs install-skills --agent claude
   acs install-skills --agent all --path D:\\my-repo

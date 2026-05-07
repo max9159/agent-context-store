@@ -18,20 +18,20 @@ acs package --task DEMO-0001 --role dev
 acs package --task DEMO-0001 --role qa
 ```
 
-Expected outputs:
+Expected outputs (in-repo mode — all under `.acs/`):
 
 ```text
-artifacts/requirements/REQ-DEMO-0001.md
-artifacts/design/SDD-DEMO-0001.md
-artifacts/adr/ADR-DEMO-0001.md
-artifacts/api/API-DEMO-0001.md
-artifacts/test/TC-DEMO-0001.md
-handoffs/HOFF-DEMO-0001-BA-SA.yaml
-handoffs/HOFF-DEMO-0001-SA-DEV.yaml
-handoffs/HOFF-DEMO-0001-DEV-QA.yaml
-packages/DEMO-0001.sa.context.md
-packages/DEMO-0001.dev.context.md
-packages/DEMO-0001.qa.context.md
+.acs/artifacts/requirements/REQ-DEMO-0001.md
+.acs/artifacts/design/SDD-DEMO-0001.md
+.acs/artifacts/adr/ADR-DEMO-0001.md
+.acs/artifacts/api/API-DEMO-0001.md
+.acs/artifacts/test/TC-DEMO-0001.md
+.acs/handoffs/HOFF-DEMO-0001-BA-SA.yaml
+.acs/handoffs/HOFF-DEMO-0001-SA-DEV.yaml
+.acs/handoffs/HOFF-DEMO-0001-DEV-QA.yaml
+.acs/packages/DEMO-0001.sa.context.md
+.acs/packages/DEMO-0001.dev.context.md
+.acs/packages/DEMO-0001.qa.context.md
 ```
 
 The example demonstrates the intended handoff pattern without requiring hosted storage or an orchestration engine.
