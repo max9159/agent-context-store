@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { select, checkbox, input, confirm } from "@inquirer/prompts";
 import {
   buildContextPackage,
   buildIndex,
@@ -82,17 +83,28 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "init") {
     const args = parseArgs(rest);
-    const rootDir = String(args.positional[0] ?? args.flags["path"] ?? process.cwd());
     const modeArg = getStringFlag(args, "mode");
+    const pathArg = String(args.positional[0] ?? args.flags["path"] ?? "");
+
     if (modeArg && !(validModes as string[]).includes(modeArg)) {
       console.error(`ERROR Unknown mode "${modeArg}". Expected one of: ${validModes.join(", ")}`);
       process.exitCode = 1;
       return;
     }
-    const mode = modeArg as StoreMode | undefined;
-    const result = await initContextStore({ rootDir, mode });
-    const label = mode ? `Initialized context store (mode: ${mode})` : "Initialized context store";
-    printResult(label, result);
+
+    // Non-interactive path: --mode provided, or stdin is not a TTY
+    const isNonInteractive = (!!modeArg && (modeArg !== "dedicated" || !!pathArg)) || !process.stdin.isTTY;
+    if (isNonInteractive) {
+      const rootDir = pathArg || process.cwd();
+      const mode = (modeArg as StoreMode) ?? "in-repo";
+      const result = await initContextStore({ rootDir, mode });
+      const label = modeArg ? `Initialized context store (mode: ${mode})` : "Initialized context store";
+      printResult(label, result);
+      return;
+    }
+
+    // Interactive wizard
+    await runInitWizard();
     return;
   }
 
@@ -222,6 +234,75 @@ async function main(argv: string[]): Promise<void> {
   }
 
   throw new Error(`Unknown command "${command}". Run "acs --help" for usage.`);
+}
+
+async function runInitWizard(): Promise<void> {
+  // Step 1 — store mode
+  const mode = await select<StoreMode>({
+    message: "How should the context store be hosted?",
+    choices: [
+      { value: "in-repo",    name: "in-repo    — .acs/ lives inside this project (default)" },
+      { value: "local",      name: "local      — stored in your user data dir, nothing committed" },
+      { value: "dedicated",  name: "dedicated  — a separate repo shared across multiple projects" },
+    ],
+    default: "in-repo",
+  });
+
+  // Step 2 — path (dedicated only)
+  let rootDir = process.cwd();
+  if (mode === "dedicated") {
+    rootDir = await input({
+      message: "Path to the dedicated store repo:",
+      default: process.cwd(),
+      validate: (v) => v.trim().length > 0 || "Path cannot be empty",
+    });
+  }
+
+  // Step 3 — agent skill targets (multi-select)
+  type SkillAgent = Exclude<AgentName, "openclaw" | "all">;
+  const agentChoices = await checkbox<SkillAgent>({
+    message: "Install agent skill files? (space to toggle)",
+    choices: [
+      { value: "claude", name: `Claude Code  → ~/.claude/skills/` },
+      { value: "cursor", name: `Cursor       → ~/.cursor/skills/` },
+      { value: "codex",  name: `Codex        → ~/.codex/skills/` },
+    ],
+  });
+
+  // Step 4 — confirm
+  const agentSummary = agentChoices.length > 0 ? agentChoices.join(", ") : "none";
+  const storePath = mode === "in-repo"
+    ? path.join(rootDir, ".acs")
+    : mode === "local"
+      ? path.join(os.homedir(), "Library", "Application Support", "agent-context-store", "stores", "<slug>")
+      : rootDir;
+
+  console.log("");
+  console.log(`  Mode:    ${mode}`);
+  console.log(`  Store:   ${storePath}`);
+  console.log(`  Skills:  ${agentSummary}`);
+  console.log("");
+
+  const proceed = await confirm({ message: "Proceed with initialization?", default: true });
+  if (!proceed) {
+    console.log("Aborted.");
+    return;
+  }
+
+  // Execute init
+  const result = await initContextStore({ rootDir, mode });
+  printResult(`Initialized context store (mode: ${mode})`, result);
+
+  // Execute skill installs
+  for (const agent of agentChoices) {
+    const skillResult = await installSkills(rootDir, agent);
+    if (skillResult.created.length > 0 || skillResult.updated.length > 0) {
+      printResult(`Installed ${agent} skills`, skillResult);
+    }
+    for (const w of skillResult.warnings) {
+      console.warn(`WARNING ${w}`);
+    }
+  }
 }
 
 async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ created: string[]; updated: string[]; warnings: string[] }> {

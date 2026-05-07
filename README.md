@@ -15,73 +15,66 @@ npm install -g agent-context-store
 acs --help
 ```
 
-## Step 2: Choose a Store Mode
+## Step 2: Initialize the store
 
-`acs` supports three storage modes so you can start lightweight and upgrade as your workflow grows.
+Run `acs init` in your project directory. When stdin is a terminal, an interactive wizard guides you through three choices:
 
-| Mode | Command | Where context is stored | Best for |
-|------|---------|------------------------|----------|
-| **in-repo** _(default)_ | `acs init` | `.acs/` inside your project | Most projects — context stays with code |
-| **local** | `acs init --mode local` | OS user-data dir (`~/.local/share/…`) | Personal workflows, no repo changes |
-| **dedicated** | `acs init --mode dedicated` | This folder IS the store root | Multi-project teams, CI governance |
+```
+? How should the context store be hosted?
+  ❯ in-repo   — .acs/ lives inside this project (default)
+    local     — stored in your user data dir, nothing committed
+    dedicated — a separate repo shared across multiple projects
 
-### In-repo (default)
+? Path to the dedicated store repo:   ← only shown for dedicated mode
 
-```bash
-cd my-project
-acs init
+? Install agent skill files? (space to toggle)
+  ✓ Claude Code  → ~/.claude/skills/
+  ✓ Cursor       → ~/.cursor/skills/
+  ○ Codex        → ~/.codex/skills/
 ```
 
-Creates `.acs/` inside your project. Commit it together with your code.
+A summary is shown before anything is written, and you can abort with `n`.
 
-### Local
+### Non-interactive / scripted usage
 
-```bash
-cd my-project
-acs init --mode local
-```
-
-Stores context in the OS user-data directory and records the project binding in a local registry. No files are written into the project repository.
-
-### Dedicated
+Pass `--mode` to skip the wizard entirely:
 
 ```bash
-mkdir context-store-repo
-cd context-store-repo
-git init
-acs init --mode dedicated
+acs init                        # wizard (TTY only)
+acs init --mode in-repo         # silent, creates .acs/ in current dir
+acs init --mode local           # silent, stores in OS user-data dir
+acs init --mode dedicated .     # silent, current dir is the store root
 ```
 
-The entire folder becomes the context store root. Use this for multi-project or multi-team governance.
+`acs` supports three storage modes:
 
-## Step 3: Configure Agents
+| Mode | Where context is stored | Best for |
+|------|------------------------|----------|
+| **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
+| **local** | OS user-data dir | Personal workflows, no repo changes |
+| **dedicated** | This folder IS the store root | Multi-project teams, CI governance |
 
-Giving each agent the right instruction or skill file so it knows when to call `acs`.
-Run `acs install-skills` with the `--agent` flag for your agent.
+### Agent skill files
+
+The wizard offers to install skill files during `acs init`. You can also run this separately at any time:
 
 ```bash
 acs install-skills --agent cursor
 acs install-skills --agent claude
 acs install-skills --agent codex
 acs install-skills --agent all
-```
-
-| Agent      | Files installed                                            |
-| ---------- | ---------------------------------------------------------- |
-| `cursor`   | `AGENTS.md`, `.cursor/skills/agent-context-store/SKILL.md` |
-| `claude`   | `CLAUDE.md`, `.claude/skills/agent-context-store/SKILL.md` |
-| `codex`    | `AGENTS.md`, `.agent/skills/agent-context-store/SKILL.md`  |
-| `openclaw` | _(not yet available — warning only)_                       |
-| `all`      | All of the above except openclaw                           |
-
-Skill files are always replaced with the bundled version.
-If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends the starter instructions to the end of the existing file.
-
-### Install into a specific repository path
-
-```bash
 acs install-skills --agent all --path /path/to/repo
 ```
+
+| Agent      | Skill files installed |
+| ---------- | --------------------- |
+| `cursor`   | `AGENTS.md`, `~/.cursor/skills/agent-context-store/SKILL.md` |
+| `claude`   | `CLAUDE.md`, `~/.claude/skills/agent-context-store/SKILL.md` |
+| `codex`    | `AGENTS.md`, `~/.codex/skills/agent-context-store/SKILL.md`  |
+| `openclaw` | _(not yet available — warning only)_ |
+| `all`      | All of the above except openclaw |
+
+Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends to it.
 
 ## Step 4: Create Artifacts
 
@@ -202,7 +195,7 @@ In **in-repo mode** all paths above are inside `.acs/`.
 | Command              | What it does                                                                                            | Example                                                      |
 | -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | `acs --version`      | Prints the installed CLI version.                                                                       | `acs --version`                                              |
-| `acs init`           | Initializes the context store. Default mode is `in-repo` (`.acs/`).                                    | `acs init`, `acs init --mode local`                         |
+| `acs init`           | Initializes the context store. Runs an interactive wizard on a TTY; pass `--mode` to skip it.          | `acs init`, `acs init --mode local`                         |
 | `acs status`         | Shows current mode, store path, initialized state, and artifact/handoff counts.                         | `acs status`                                                 |
 | `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. | `acs install-skills --agent cursor`                          |
 | `acs roles`          | Lists configured role profiles.                                                                         | `acs roles`                                                  |
