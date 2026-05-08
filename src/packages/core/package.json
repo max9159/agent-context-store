@@ -1,6 +1,6 @@
 {
   "name": "agent-context-store-core",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Core library for Agent Context Store Toolkit.",
   "type": "module",
   "license": "MIT",
