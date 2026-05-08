@@ -56,6 +56,13 @@ describe("install-skills --agent cursor", () => {
       `Found wrong '.agents/skills/' path in ~/.cursor/AGENTS.md`
     );
   });
+
+  test("installed BA skill creates every artifact required by SA validation", async () => {
+    const content = await readText(join(home, ".cursor/skills/acs-ba/SKILL.md"));
+    assert.ok(content.includes("acs ba new srs --task TASK-123"), "BA skill should create an SRS");
+    assert.ok(content.includes("acs ba new user-story --task TASK-123"), "BA skill should create a user story");
+    assert.ok(content.includes("acs ba new acceptance-criteria --task TASK-123"), "BA skill should create acceptance criteria");
+  });
 });
 
 describe("install-skills --agent claude", () => {

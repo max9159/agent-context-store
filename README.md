@@ -103,6 +103,8 @@ The `acs-ba` skill activates and the agent internally runs:
 ```bash
 acs status && acs doctor
 acs ba new srs --task DEMO-0001 --title "Login with OTP"
+acs ba new user-story --task DEMO-0001 --title "Login with OTP User Story"
+acs ba new acceptance-criteria --task DEMO-0001 --title "Login with OTP Acceptance Criteria"
 acs validate --role ba --task DEMO-0001
 acs handoff create --from ba --to sa --task DEMO-0001
 acs package --task DEMO-0001 --role sa

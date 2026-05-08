@@ -1,6 +1,6 @@
 ---
 name: acs-ba
-description: ACS Business Analyst role — capture requirements as SRS artifacts and hand off to the SA agent. Use when acting as BA, writing requirements, or starting a new task from scratch.
+description: ACS Business Analyst role — capture requirements as SRS, user story, and acceptance criteria artifacts, then hand off to the SA agent. Use when acting as BA, writing requirements, or starting a new task from scratch.
 ---
 
 # ACS — Business Analyst (BA) Role
@@ -14,13 +14,15 @@ acs doctor
 
 Fix any errors before continuing.
 
-## 2. Create the SRS Artifact
+## 2. Create BA Artifacts
 
 ```bash
 acs ba new srs --task TASK-123 --title "Feature requirements"
+acs ba new user-story --task TASK-123 --title "Feature user story"
+acs ba new acceptance-criteria --task TASK-123 --title "Feature acceptance criteria"
 ```
 
-**Fill every section immediately** — replace all placeholders with real content from the conversation and source files. List consulted files under `source_refs`. Complete the Validation Checklist at the end of the file.
+**Fill every section immediately** — replace all placeholders with real content from the conversation and source files. List consulted files under `source_refs`. Complete the Validation Checklist at the end of each file.
 
 ## 3. Validate
 
@@ -49,6 +51,8 @@ The BA role has completed requirements for TASK-123.
 
 Artifacts ready for you:
 - <path to SRS artifact>
+- <path to user story artifact>
+- <path to acceptance criteria artifact>
 
 Context package: <path printed by acs package>
 
@@ -60,5 +64,5 @@ Your next steps (SA role):
 5. When done, hand off to DEV: acs handoff create --from sa --to dev --task TASK-123
 
 Open questions from BA (resolve before or during design):
-- <list any open questions from the SRS>
+- <list any open questions from the BA artifacts>
 ```
