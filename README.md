@@ -83,59 +83,97 @@ A summary is shown before anything is written, and you can abort with `n`.
 
 ## Step 3: Run Your First Workflow
 
-Once the store is initialized, use `acs` to create artifacts, validate work, hand off between roles, and package context for the next agent. The examples below use task `DEMO-0001` — replace it with your own task ID.
+After setup, each team member opens their AI agent (Cursor or Claude Code) and invokes the matching role skill by name. The skill tells the agent exactly which `acs` commands to run — the human never types `acs` directly.
 
-### Use Case 1 — BA captures requirements and hands off to SA
+> **Skill invocation syntax**
+> - Cursor / Claude Code: `@acs-ba`, `@acs-sa`, `@acs-dev`, `@acs-qa`
 
-The BA agent writes a requirements document, confirms all artifacts are valid, and creates a locked handoff record for the SA agent to pick up.
+The examples below follow a single feature task `DEMO-0001: Login with OTP` through the full BA → SA → Dev → QA lifecycle.
 
-```bash
-acs roles                                          # see available roles
-acs role explain ba --task DEMO-0001               # show what BA should produce
-acs ba new srs --task DEMO-0001 --title "Login with OTP"  # create the SRS artifact
-acs validate --role ba --task DEMO-0001            # confirm artifacts are complete
-acs handoff create --from ba --to sa --task DEMO-0001     # lock the BA→SA contract
-acs handoff check HOFF-DEMO-0001-BA-SA             # verify the handoff record
-acs package --task DEMO-0001 --role sa             # bundle context for the SA agent
+---
+
+### Use Case 1 — BA captures requirements
+
+**Human → Cursor / Claude Code:**
+```
+/acs-ba We need to add OTP-based login. Task ID is DEMO-0001. Title: "Login with OTP".
 ```
 
-### Use Case 2 — SA produces design artifacts and hands off to Dev
-
-The SA agent reads the BA package, produces the system design and API spec, then hands off a verified package to the Dev agent.
-
+The `acs-ba` skill activates and the agent internally runs:
 ```bash
-acs next --role sa --task DEMO-0001                # see what SA needs to produce
+acs status && acs doctor
+acs ba new srs --task DEMO-0001 --title "Login with OTP"
+acs validate --role ba --task DEMO-0001
+acs handoff create --from ba --to sa --task DEMO-0001
+acs package --task DEMO-0001 --role sa
+acs index
+```
+
+The agent ends its response with a structured `[HANDOFF: BA → SA | DEMO-0001]` prompt for the SA agent to pick up.
+
+---
+
+### Use Case 2 — SA produces system design
+
+**Human → Cursor / Claude Code:**
+```
+/acs-sa Pick up DEMO-0001 from BA. Design the OTP login system.
+```
+
+The `acs-sa` skill activates and the agent internally runs:
+```bash
+acs next --role sa --task DEMO-0001
 acs sa new sdd --task DEMO-0001 --title "Login with OTP System Design"
 acs sa new adr --task DEMO-0001 --title "Use Redis for OTP State"
 acs sa new api-design --task DEMO-0001 --title "OTP Login API"
-acs validate --role sa --task DEMO-0001            # confirm design artifacts pass validation
+acs validate --role sa --task DEMO-0001
 acs handoff create --from sa --to dev --task DEMO-0001
-acs package --task DEMO-0001 --role dev            # bundle context for the Dev agent
+acs package --task DEMO-0001 --role dev
+acs index
 ```
 
-### Use Case 3 — Dev implements and hands off to QA
+The agent ends its response with a `[HANDOFF: SA → DEV | DEMO-0001]` prompt.
 
-The Dev agent reads the SA package, records implementation notes, and hands off to QA with a ready-to-test package.
+---
 
+### Use Case 3 — Dev implements the feature
+
+**Human → Cursor / Claude Code:**
+```
+/acs-dev Implement DEMO-0001 based on the SA design. Task ID is DEMO-0001.
+```
+
+The `acs-dev` skill activates and the agent internally runs:
 ```bash
-acs next --role dev --task DEMO-0001               # confirm inputs are available
-acs dev new implementation-note --task DEMO-0001   # record implementation decisions
+acs next --role dev --task DEMO-0001
+acs dev new implementation-note --task DEMO-0001
 acs validate --role dev --task DEMO-0001
 acs handoff create --from dev --to qa --task DEMO-0001
-acs package --task DEMO-0001 --role qa             # bundle context for the QA agent
+acs package --task DEMO-0001 --role qa
+acs index
 ```
 
-### Use Case 4 — QA writes a test plan and closes the loop
+The agent ends its response with a `[HANDOFF: DEV → QA | DEMO-0001]` prompt.
 
-The QA agent reads the Dev package and writes a structured test plan to complete the task lifecycle.
+---
 
+### Use Case 4 — QA validates and closes the task
+
+**Human → Cursor / Claude Code:**
+```
+/acs-qa Write the test plan for DEMO-0001.
+```
+
+The `acs-qa` skill activates and the agent internally runs:
 ```bash
-acs next --role qa --task DEMO-0001                # confirm handoff from Dev is present
+acs next --role qa --task DEMO-0001
 acs qa new test-plan --task DEMO-0001 --title "OTP Login Test Plan"
 acs validate --role qa --task DEMO-0001
-acs handoff list --task DEMO-0001                  # review all handoffs for the task
-acs index                                          # rebuild index.json
+acs handoff list --task DEMO-0001
+acs index
 ```
+
+All four role artifacts and handoff records are now persisted in the store.
 
 ## How Agents Should Use It
 
