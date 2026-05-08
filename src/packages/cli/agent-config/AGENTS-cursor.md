@@ -13,5 +13,5 @@ Roles: **BA** (requirements) → **SA** (design) → **DEV** (implementation) �
 When the user asks for requirements, design handoff, SDLC artifacts, context packages, agent-to-agent handoff, role assignment (BA/SA/DEV/QA), or wants to continue from a previous session, follow the full procedure in the agent-context-store skill:
 
 ```text
-.codex/skills/agent-context-store/SKILL.md
+.cursor/skills/agent-context-store/SKILL.md
 ```

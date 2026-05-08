@@ -44,6 +44,18 @@ describe("install-skills --agent cursor", () => {
     assert.ok(exists(join(home, ".cursor/AGENTS.md")), "AGENTS.md missing from ~/.cursor");
     assert.ok(exists(join(home, ".cursor/skills/agent-context-store/SKILL.md")), "SKILL.md missing from user dir");
   });
+
+  test("~/.cursor/AGENTS.md references the correct .cursor/skills/ path", async () => {
+    const content = await readText(join(home, ".cursor/AGENTS.md"));
+    assert.ok(
+      content.includes(".cursor/skills/agent-context-store/SKILL.md"),
+      `Expected '.cursor/skills/agent-context-store/SKILL.md' in ~/.cursor/AGENTS.md but got:\n${content}`
+    );
+    assert.ok(
+      !content.includes(".agents/skills/"),
+      `Found wrong '.agents/skills/' path in ~/.cursor/AGENTS.md`
+    );
+  });
 });
 
 describe("install-skills --agent claude", () => {
@@ -77,6 +89,18 @@ describe("install-skills --agent codex", () => {
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(exists(join(home, ".codex/AGENTS.md")), "AGENTS.md missing from ~/.codex");
     assert.ok(exists(join(home, ".codex/skills/agent-context-store/SKILL.md")), "SKILL.md missing from user dir");
+  });
+
+  test("~/.codex/AGENTS.md references the correct .codex/skills/ path", async () => {
+    const content = await readText(join(home, ".codex/AGENTS.md"));
+    assert.ok(
+      content.includes(".codex/skills/agent-context-store/SKILL.md"),
+      `Expected '.codex/skills/agent-context-store/SKILL.md' in ~/.codex/AGENTS.md but got:\n${content}`
+    );
+    assert.ok(
+      !content.includes(".agents/skills/"),
+      `Found wrong '.agents/skills/' path in ~/.codex/AGENTS.md`
+    );
   });
 });
 

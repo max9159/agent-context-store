@@ -47,7 +47,7 @@ const ROLE_SKILLS = ["agent-context-store", "acs-ba", "acs-sa", "acs-dev", "acs-
 
 // User-level dotdir config files installed into ~/.cursor, ~/.claude, ~/.codex
 const agentDotdirFiles: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
-  cursor: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
+  cursor: [{ source: "AGENTS-cursor.md", target: "AGENTS.md", mode: "append" }],
   claude: [{ source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" }],
   codex: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
 };
