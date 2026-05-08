@@ -81,76 +81,65 @@ Run `acs init` in your project directory. When stdin is a terminal, an interacti
 
 A summary is shown before anything is written, and you can abort with `n`.
 
-### Non-interactive / scripted usage
+## Step 3: Run Your First Workflow
 
-Pass `--mode` to skip the wizard entirely:
+Once the store is initialized, use `acs` to create artifacts, validate work, hand off between roles, and package context for the next agent. The examples below use task `DEMO-0001` — replace it with your own task ID.
+
+### Use Case 1 — BA captures requirements and hands off to SA
+
+The BA agent writes a requirements document, confirms all artifacts are valid, and creates a locked handoff record for the SA agent to pick up.
 
 ```bash
-acs init                        # wizard (TTY only)
-acs init --mode in-repo         # silent, creates .acs/ in current dir
-acs init --mode local           # silent, stores in OS user-data dir
-acs init --mode dedicated .     # silent, current dir is the store root
+acs roles                                          # see available roles
+acs role explain ba --task DEMO-0001               # show what BA should produce
+acs ba new srs --task DEMO-0001 --title "Login with OTP"  # create the SRS artifact
+acs validate --role ba --task DEMO-0001            # confirm artifacts are complete
+acs handoff create --from ba --to sa --task DEMO-0001     # lock the BA→SA contract
+acs handoff check HOFF-DEMO-0001-BA-SA             # verify the handoff record
+acs package --task DEMO-0001 --role sa             # bundle context for the SA agent
 ```
 
-`acs` supports three storage modes:
+### Use Case 2 — SA produces design artifacts and hands off to Dev
 
-| Mode | Where context is stored | Best for |
-|------|------------------------|----------|
-| **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
-| **local** | OS user-data dir | Personal workflows, no repo changes |
-| **dedicated** | This folder IS the store root | Multi-project teams, CI governance |
-
-### Agent skill files
-
-The wizard offers to install skill files during `acs init`. You can also run this separately at any time:
+The SA agent reads the BA package, produces the system design and API spec, then hands off a verified package to the Dev agent.
 
 ```bash
-acs install-skills --agent cursor
-acs install-skills --agent claude
-acs install-skills --agent codex
-acs install-skills --agent all
-acs install-skills --agent all --path /path/to/repo
-```
-
-| Agent      | Skill files installed |
-| ---------- | --------------------- |
-| `cursor`   | `AGENTS.md`, `~/.cursor/skills/agent-context-store/SKILL.md` |
-| `claude`   | `CLAUDE.md`, `~/.claude/skills/agent-context-store/SKILL.md` |
-| `codex`    | `AGENTS.md`, `~/.codex/skills/agent-context-store/SKILL.md`  |
-| `openclaw` | _(not yet available — warning only)_ |
-| `all`      | All of the above except openclaw |
-
-Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends to it.
-
-## Step 4: Create Artifacts
-
-```bash
-acs new srs --task DEMO-0001 --title "Login with OTP"
-acs new sdd --task DEMO-0001 --title "Login with OTP System Design"
-acs new adr --task DEMO-0001 --title "Use Redis for OTP State"
+acs next --role sa --task DEMO-0001                # see what SA needs to produce
+acs sa new sdd --task DEMO-0001 --title "Login with OTP System Design"
+acs sa new adr --task DEMO-0001 --title "Use Redis for OTP State"
 acs sa new api-design --task DEMO-0001 --title "OTP Login API"
-acs dev new implementation-note --task DEMO-0001
-acs qa new test-plan --task DEMO-0001 --title "OTP Login Test Plan"
+acs validate --role sa --task DEMO-0001            # confirm design artifacts pass validation
+acs handoff create --from sa --to dev --task DEMO-0001
+acs package --task DEMO-0001 --role dev            # bundle context for the Dev agent
 ```
 
-Validate, create handoffs, and package context for the next role:
+### Use Case 3 — Dev implements and hands off to QA
+
+The Dev agent reads the SA package, records implementation notes, and hands off to QA with a ready-to-test package.
 
 ```bash
-acs roles
-acs role explain dev --task DEMO-0001
-acs next --role sa --task DEMO-0001
-acs validate --role sa --task DEMO-0001
-acs handoff create --from ba --to sa --task DEMO-0001
-acs handoff check HOFF-DEMO-0001-BA-SA
-acs handoff list --task DEMO-0001
-acs package --task DEMO-0001 --role sa
-acs dev package --task DEMO-0001
-acs index
+acs next --role dev --task DEMO-0001               # confirm inputs are available
+acs dev new implementation-note --task DEMO-0001   # record implementation decisions
+acs validate --role dev --task DEMO-0001
+acs handoff create --from dev --to qa --task DEMO-0001
+acs package --task DEMO-0001 --role qa             # bundle context for the QA agent
+```
+
+### Use Case 4 — QA writes a test plan and closes the loop
+
+The QA agent reads the Dev package and writes a structured test plan to complete the task lifecycle.
+
+```bash
+acs next --role qa --task DEMO-0001                # confirm handoff from Dev is present
+acs qa new test-plan --task DEMO-0001 --title "OTP Login Test Plan"
+acs validate --role qa --task DEMO-0001
+acs handoff list --task DEMO-0001                  # review all handoffs for the task
+acs index                                          # rebuild index.json
 ```
 
 ## How Agents Should Use It
 
-Give each agent access to the same project (in-repo mode) or context store repository (dedicated mode) and ask it to use `acs` for durable handoffs.
+Give each agent access to the same project (in-repo mode) or context store repository (dedicated mode) and instruct it to use `acs` for durable handoffs.
 
 Suggested agent instruction:
 
@@ -162,25 +151,6 @@ Create task artifacts with acs new or acs <role> new.
 Create role handoffs with acs handoff create.
 Generate the next role package with acs package.
 Commit context store changes to the configured Git repository.
-```
-
-Typical role flow:
-
-```bash
-acs ba new srs --task TASK-123 --title "Feature requirement"
-acs handoff create --from ba --to sa --task TASK-123
-acs package --task TASK-123 --role sa
-
-acs sa new sdd --task TASK-123 --title "Feature system design"
-acs sa new api-design --task TASK-123 --title "Feature API design"
-acs handoff create --from sa --to dev --task TASK-123
-acs package --task TASK-123 --role dev
-
-acs dev new implementation-note --task TASK-123
-acs handoff create --from dev --to qa --task TASK-123
-acs package --task TASK-123 --role qa
-
-acs qa new test-plan --task TASK-123 --title "Feature test plan"
 ```
 
 ## Context Store Layout
@@ -256,7 +226,7 @@ In **in-repo mode** all paths above are inside `.acs/`.
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      | `acs index`                                                  |
 | `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              | `acs doctor`                                                 |
 
-### Command Reference
+### Command - Reference
 
 ```bash
 acs --version
@@ -288,6 +258,47 @@ Common roles:
 - `qa`
 - `reviewer`
 
+
+### Command - init
+
+Pass `--mode` to skip the wizard entirely:
+
+```bash
+acs init                        # wizard (TTY only)
+acs init --mode in-repo         # silent, creates .acs/ in current dir
+acs init --mode local           # silent, stores in OS user-data dir
+acs init --mode dedicated .     # silent, current dir is the store root
+```
+
+`acs` supports three storage modes:
+
+| Mode | Where context is stored | Best for |
+|------|------------------------|----------|
+| **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
+| **local** | OS user-data dir | Personal workflows, no repo changes |
+| **dedicated** | This folder IS the store root | Multi-project teams, CI governance |
+
+### Command - install-skills
+
+The wizard offers to install skill files during `acs init`. You can also run this separately at any time:
+
+```bash
+acs install-skills --agent cursor
+acs install-skills --agent claude
+acs install-skills --agent codex
+acs install-skills --agent all
+acs install-skills --agent all --path /path/to/repo
+```
+
+| Agent      | Skill files installed |
+| ---------- | --------------------- |
+| `cursor`   | `AGENTS.md`, `~/.cursor/skills/agent-context-store/SKILL.md` |
+| `claude`   | `CLAUDE.md`, `~/.claude/skills/agent-context-store/SKILL.md` |
+| `codex`    | `AGENTS.md`, `~/.codex/skills/agent-context-store/SKILL.md`  |
+| `openclaw` | _(not yet available — warning only)_ |
+| `all`      | All of the above except openclaw |
+
+Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends to it.
 
 ## Developing This Repository
 
