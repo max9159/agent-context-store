@@ -81,6 +81,21 @@ Run `acs init` in your project directory. When stdin is a terminal, an interacti
 
 A summary is shown before anything is written, and you can abort with `n`.
 
+Pass `--mode` to skip the wizard entirely:
+
+```bash
+acs init                        # wizard (TTY only)
+acs init --mode in-repo         # silent, creates .acs/ in current dir
+acs init --mode local           # silent, stores in OS user-data dir
+acs init --mode dedicated .     # silent, current dir is the store root
+```
+
+| Mode | Where context is stored | Best for |
+|------|------------------------|----------|
+| **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
+| **local** | OS user-data dir | Personal workflows, no repo changes |
+| **dedicated** | This folder IS the store root | Multi-project teams, CI governance |
+
 ## Step 3: Run Your First Workflow
 
 After setup, each team member opens their AI agent (Cursor or Claude Code) and invokes the matching role skill by name. The skill tells the agent exactly which `acs` commands to run — the human never types `acs` directly.
@@ -177,28 +192,12 @@ acs index
 
 All four role artifacts and handoff records are now persisted in the store.
 
-## How Agents Should Use It
-
-Give each agent access to the same project (in-repo mode) or context store repository (dedicated mode) and instruct it to use `acs` for durable handoffs.
-
-Suggested agent instruction:
-
-```text
-Use Agent Context Store for durable project context.
-Before creating or handing off work, run acs status and acs validate.
-Use acs roles, acs role explain, and acs next to follow the configured workflow.
-Create task artifacts with acs new or acs <role> new.
-Create role handoffs with acs handoff create.
-Generate the next role package with acs package.
-Commit context store changes to the configured Git repository.
-```
-
 ## Context Store Layout
 
-### In-repo mode (default)
+The store root is `.acs/` in **in-repo** mode and `<store-root>/` in **dedicated** mode. Both use the same structure:
 
 ```text
-.acs/
+<store-root>/
   config.yaml
   acs.yaml
   index.json
@@ -216,57 +215,33 @@ Commit context store changes to the configured Git repository.
   docs/
 ```
 
-### Dedicated mode
-
-```text
-<store-root>/
-  config.yaml
-  acs.yaml
-  index.json
-  audit/
-  artifacts/
-  handoffs/
-  summaries/
-  packages/
-  roles/
-  artifact-types/
-  workflows/
-  schemas/
-  templates/
-  docs/
-```
-
-Important outputs:
-
 - `artifacts/`: durable SDLC artifacts such as requirements, designs, ADRs, API notes, and test plans.
 - `handoffs/`: explicit role-to-role handoff records.
 - `packages/`: role-specific context bundles for the next agent.
 - `index.json`: generated artifact and handoff index.
 - `audit/`: local audit log for CLI-created changes.
 
-In **in-repo mode** all paths above are inside `.acs/`.
-
 ## Commands
 
-| Command              | What it does                                                                                            | Example                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `acs --version`      | Prints the installed CLI version.                                                                       | `acs --version`                                              |
-| `acs init`           | Initializes the context store. Runs an interactive wizard on a TTY; pass `--mode` to skip it.          | `acs init`, `acs init --mode local`                         |
-| `acs status`         | Shows current mode, store path, initialized state, and artifact/handoff counts.                         | `acs status`                                                 |
-| `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. | `acs install-skills --agent cursor`                          |
-| `acs roles`          | Lists configured role profiles.                                                                         | `acs roles`                                                  |
-| `acs role explain`   | Explains what a role can create/read and suggests task commands.                                        | `acs role explain dev --task TASK-123`                       |
-| `acs next`           | Shows missing inputs, suggested outputs, and next workflow commands.                                    | `acs next --role sa --task TASK-123`                         |
-| `acs new`            | Creates a configured SDLC artifact.                                                                     | `acs ba new srs --task TASK-123`                             |
-| `acs validate`       | Validates the context store structure, artifact metadata, schemas, and handoff records.                 | `acs validate --role dev --task TASK-123`                    |
-| `acs handoff create` | Creates a role-to-role handoff record for a task.                                                       | `acs handoff create --from sa --to dev --task TASK-123`      |
-| `acs handoff check`  | Validates a specific handoff before another agent relies on it.                                         | `acs handoff check HOFF-TASK-123-SA-DEV`                     |
-| `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             | `acs handoff list --task TASK-123`                           |
-| `acs package`        | Builds a role-specific context package for the next agent or automation step.                           | `acs package --task TASK-123 --role dev`                     |
-| `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      | `acs index`                                                  |
-| `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              | `acs doctor`                                                 |
+| Command              | What it does                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| `acs --version`      | Prints the installed CLI version.                                                                       |
+| `acs init`           | Initializes the context store. Runs an interactive wizard on a TTY; pass `--mode` to skip it.          |
+| `acs status`         | Shows current mode, store path, initialized state, and artifact/handoff counts.                         |
+| `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. |
+| `acs roles`          | Lists configured role profiles (`ba`, `sa`, `dev`, `qa`).                                              |
+| `acs role explain`   | Explains what a role can create/read and suggests task commands.                                        |
+| `acs next`           | Shows missing inputs, suggested outputs, and next workflow commands.                                    |
+| `acs new`            | Creates a configured SDLC artifact.                                                                     |
+| `acs validate`       | Validates the context store structure, artifact metadata, schemas, and handoff records.                 |
+| `acs handoff create` | Creates a role-to-role handoff record for a task.                                                       |
+| `acs handoff check`  | Validates a specific handoff before another agent relies on it.                                         |
+| `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             |
+| `acs package`        | Builds a role-specific context package for the next agent or automation step.                           |
+| `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      |
+| `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              |
 
-### Command - Reference
+### Full syntax
 
 ```bash
 acs --version
@@ -288,35 +263,6 @@ acs <ROLE> package --task <TASK_ID> [--format markdown|json]
 acs index
 acs doctor
 ```
-
-Common roles:
-
-- `ba`
-- `sa`
-- `dev`
-- `developer`
-- `qa`
-- `reviewer`
-
-
-### Command - init
-
-Pass `--mode` to skip the wizard entirely:
-
-```bash
-acs init                        # wizard (TTY only)
-acs init --mode in-repo         # silent, creates .acs/ in current dir
-acs init --mode local           # silent, stores in OS user-data dir
-acs init --mode dedicated .     # silent, current dir is the store root
-```
-
-`acs` supports three storage modes:
-
-| Mode | Where context is stored | Best for |
-|------|------------------------|----------|
-| **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
-| **local** | OS user-data dir | Personal workflows, no repo changes |
-| **dedicated** | This folder IS the store root | Multi-project teams, CI governance |
 
 ### Command - install-skills
 
