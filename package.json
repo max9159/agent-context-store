@@ -1,6 +1,6 @@
 {
   "name": "agent-context-store-workspace",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Agent Context Store Toolkit: Git-backed, schema-validated artifact handoff for AI agents.",
   "private": true,
   "type": "module",
