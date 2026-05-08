@@ -4,6 +4,8 @@ Agent Context Store (`acs`) is a Git-backed, schema-validated handoff toolkit th
 
 Each role agent writes schema-validated documents — SRS, design docs, ADRs, API specs, test plans — with structured frontmatter into a Git-tracked store. A validated handoff record acts as the contract between agents; the receiving agent packages and reads it before starting work. Works with Cursor, Claude Code, Codex, CI pipelines, and any custom agent runtime.
 
+`acs` is built on the same handoff principles formalized by the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/handoffs/), the [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/handoff) handoff orchestration, and Google's [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A) — applied to the SDLC roles BA, SA, Dev, QA, and persisted to Git so handoffs survive across runtimes, sessions, and CI.
+
 ## Architecture
 
 ```mermaid
@@ -285,6 +287,33 @@ acs install-skills --agent all --path /path/to/repo
 | `all`      | All of the above except openclaw |
 
 Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends to it.
+
+
+## Aligned with Industry Handoff Standards
+
+`acs` adopts the same handoff vocabulary used by the major agent frameworks — typed handoff records, dynamic role-to-role routing, full task ownership transfer, capability advertisement, and durable checkpointing — and grounds them in a Git-tracked store so the handoff itself becomes an auditable, reviewable artifact rather than an in-memory tool call.
+
+| Concept | Industry definition | `acs` equivalent |
+|---------|--------------------|------------------|
+| **Typed handoff contract** | OpenAI's `handoff()` with `input_type` schema, `handoff_description`, and `on_handoff` callback validates the data passed between agents. [[#1]](#references) | `acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>` writes a YAML record validated against a JSON schema; `acs handoff check` is the receiver-side guard equivalent to `on_handoff` validation. |
+| **Context filtering on handoff** | OpenAI `input_filter` and Microsoft's `HandoffAgentExecutor` strip handoff tool calls before forwarding to the next agent. [[#1]](#references) [[#2]](#references) | `acs package --task <TASK_ID> --role <ROLE>` builds a role-scoped context bundle so the receiving agent reads only what is relevant to its job. |
+| **Full task ownership transfer** | Microsoft Agent Framework: "the agent receiving the handoff takes full ownership of the task" (vs. agent-as-tools, where control returns). [[#2]](#references) | BA → SA → Dev → QA each take complete ownership of the task in their phase; control does not return to the previous role. |
+| **Mesh topology, no central orchestrator** | Microsoft: agents are connected directly; each decides when to hand off. [[#2]](#references) | No orchestrator process — each role agent independently decides when its artifacts are complete and issues a handoff. The store is the shared substrate. |
+| **Dynamic routing rules** | Microsoft `HandoffBuilder.add_handoff(...)` / `WithHandoffs(...)` declares which agents may route to which. [[#2]](#references) | `workflows/` and `roles/` in the store define the legal BA→SA→Dev→QA edges; `acs validate` rejects out-of-policy handoffs. |
+| **Capability discovery (Agent Cards)** | A2A: agents advertise abilities via JSON Agent Cards so peers know what they can do. [[#3]](#references) | `acs roles` and `acs role explain <ROLE>` expose each role's inputs, outputs, and allowed artifact types — the role profile is the Agent Card. |
+| **Tasks & artifacts as the unit of exchange** | A2A: communication centers on tasks with lifecycles; artifacts are the task outputs. [[#4]](#references) | Every `acs` operation is keyed by `--task <TASK_ID>`; `artifacts/` holds the schema-validated outputs of each role's task phase. |
+| **Durable, resumable workflows** | Microsoft `checkpoint_storage` / `FileCheckpointStorage` lets workflows pause and resume hours or days later. [[#2]](#references) | The Git-tracked store *is* the checkpoint. Any agent on any machine can `git pull` and resume from the last validated handoff. |
+| **Runtime-agnostic interoperability** | A2A: opaque agents on different frameworks collaborate without sharing memory or internal state. [[#4]](#references) | Cursor, Claude Code, Codex, and CI agents collaborate purely through validated artifacts and handoff records — no shared runtime, no shared memory. |
+| **Auditable handoff history** | A2A emphasizes observability and auditability for enterprise use. [[#4]](#references) | `audit/`, `index.json`, `acs handoff list`, and Git history give a complete, reviewable trail of every handoff. |
+
+In short: industry handoff frameworks model handoffs as in-process tool calls between live agent instances. `acs` models them as **persisted, schema-validated, Git-reviewable contracts** — making the same pattern work across role boundaries, agent runtimes, machines, and time.
+
+### References
+
+1. OpenAI Agents SDK — Handoffs: <https://openai.github.io/openai-agents-python/handoffs/>
+2. Microsoft Agent Framework — Handoff Orchestration: <https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/handoff?pivots=programming-language-csharp>
+3. Google Developers Blog — A2A: A new era of agent interoperability: <https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/>
+4. A2A Project — Agent2Agent protocol repository: <https://github.com/a2aproject/A2A>
 
 ## Developing This Repository
 
