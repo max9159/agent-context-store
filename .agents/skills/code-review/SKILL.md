@@ -1,7 +1,6 @@
 ---
 name: code-review
-description: Reviews staged code changes by following the canonical Claude code-review agent workflow.
-disable-model-invocation: true
+description: Use when the user wants Codex to run the repo-local code review workflow. Reads the canonical Claude agent instruction and reviews code changes without modifying code.
 ---
 
 # Code Review

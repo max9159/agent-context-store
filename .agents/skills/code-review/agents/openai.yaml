@@ -1,0 +1,3 @@
+display_name: Code Review
+short_description: Codex bridge to the repo's Claude code review workflow.
+default_prompt: Review Agent Context Store changes by following .claude/agents/code-review.md and the repo architecture rules.

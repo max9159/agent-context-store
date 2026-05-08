@@ -1,0 +1,3 @@
+display_name: System Analytics
+short_description: Codex bridge to the repo's Claude system analytics workflow.
+default_prompt: Turn an Agent Context Store requirement into a concrete implementation plan by following .claude/agents/system-analytics.md and the repo architecture rules.

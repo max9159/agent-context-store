@@ -1,14 +1,13 @@
 ---
-name: code-review
-description: Reviews staged code changes by following the canonical Claude code-review agent workflow.
-disable-model-invocation: true
+name: develop-by-plan
+description: Use when the user wants Codex to implement an approved Agent Context Store plan. Reads the canonical Claude agent instruction and follows the plan exactly.
 ---
 
-# Code Review
+# Develop By Plan
 
 Read and follow the canonical workflow:
 
-- `.claude/agents/code-review.md`
+- `.claude/agents/develop-by-plan.md`
 
 Do not duplicate or override that workflow here. If the file is missing or unreadable, stop and report the issue.
 

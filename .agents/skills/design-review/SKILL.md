@@ -1,14 +1,13 @@
 ---
-name: code-review
-description: Reviews staged code changes by following the canonical Claude code-review agent workflow.
-disable-model-invocation: true
+name: design-review
+description: Use when the user wants Codex to run the repo-local design review workflow. Reads the canonical Claude agent instruction and reviews plans or proposals before implementation.
 ---
 
-# Code Review
+# Design Review
 
 Read and follow the canonical workflow:
 
-- `.claude/agents/code-review.md`
+- `.claude/agents/design-review.md`
 
 Do not duplicate or override that workflow here. If the file is missing or unreadable, stop and report the issue.
 
