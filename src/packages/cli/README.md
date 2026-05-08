@@ -68,15 +68,15 @@ acs install-skills --agent all
 acs install-skills --agent all --path /path/to/repo
 ```
 
-| Agent      | Skill files installed |
-| ---------- | --------------------- |
-| `cursor`   | `AGENTS.md`, `~/.cursor/skills/agent-context-store/SKILL.md` |
-| `claude`   | `CLAUDE.md`, `~/.claude/skills/agent-context-store/SKILL.md` |
-| `codex`    | `AGENTS.md`, `~/.codex/skills/agent-context-store/SKILL.md`  |
+| Agent      | Files installed |
+| ---------- | --------------- |
+| `cursor`   | `~/.cursor/AGENTS.md` (append), `~/.cursor/skills/agent-context-store/SKILL.md` |
+| `claude`   | `~/.claude/CLAUDE.md` (append), `~/.claude/skills/agent-context-store/SKILL.md` |
+| `codex`    | `~/.codex/AGENTS.md`  (append), `~/.codex/skills/agent-context-store/SKILL.md`  |
 | `openclaw` | _(not yet available — warning only)_ |
 | `all`      | All of the above except openclaw |
 
-Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends to it.
+Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists in the target dotdir, the installer appends to it.
 
 ## Step 4: Create Artifacts
 

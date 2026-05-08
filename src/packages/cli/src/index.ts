@@ -45,8 +45,8 @@ interface AgentConfigFile {
 
 const ROLE_SKILLS = ["agent-context-store", "acs-ba", "acs-sa", "acs-dev", "acs-qa"] as const;
 
-// Project-level config files installed into the target repo root
-const agentProjectFiles: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
+// User-level dotdir config files installed into ~/.cursor, ~/.claude, ~/.codex
+const agentDotdirFiles: Record<Exclude<AgentName, "openclaw" | "all">, AgentConfigFile[]> = {
   cursor: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
   claude: [{ source: "CLAUDE.md", target: "CLAUDE.md", mode: "append" }],
   codex: [{ source: "AGENTS.md", target: "AGENTS.md", mode: "append" }],
@@ -263,9 +263,9 @@ async function runInitWizard(): Promise<void> {
   const agentChoices = await checkbox<SkillAgent>({
     message: "Install agent skill files? (space to toggle)",
     choices: [
-      { value: "claude", name: `Claude Code  → ~/.claude/skills/` },
-      { value: "cursor", name: `Cursor       → ~/.cursor/skills/` },
-      { value: "codex",  name: `Codex        → ~/.codex/skills/` },
+      { value: "claude", name: `Claude Code  → ~/.claude/CLAUDE.md + ~/.claude/skills/` },
+      { value: "cursor", name: `Cursor       → ~/.cursor/AGENTS.md + ~/.cursor/skills/` },
+      { value: "codex",  name: `Codex        → ~/.codex/AGENTS.md  + ~/.codex/skills/` },
     ],
   });
 
@@ -305,8 +305,7 @@ async function runInitWizard(): Promise<void> {
   }
 }
 
-async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ created: string[]; updated: string[]; warnings: string[] }> {
-  const rootDir = path.resolve(rootDirInput);
+async function installSkills(_rootDirInput: string, agent: AgentName): Promise<{ created: string[]; updated: string[]; warnings: string[] }> {
   const sourceRoot = findAgentConfigRoot();
   const result = { created: [] as string[], updated: [] as string[], warnings: [] as string[] };
 
@@ -323,23 +322,26 @@ async function installSkills(rootDirInput: string, agent: AgentName): Promise<{ 
     result.warnings.push("OpenClaw skill target is not available yet");
   }
 
-  // Install project-level config files (AGENTS.md / CLAUDE.md) into rootDir
-  const projectFiles = uniqueConfigFiles(agents.flatMap((a) => agentProjectFiles[a]));
-  for (const file of projectFiles) {
-    const sourcePath = path.join(sourceRoot, file.source);
-    const targetPath = path.join(rootDir, file.target);
-    const targetExists = existsSync(targetPath);
-    await mkdir(path.dirname(targetPath), { recursive: true });
-    if (targetExists && file.mode === "append") {
-      const content = (await readFile(sourcePath, "utf8")).trimEnd();
-      await appendFile(targetPath, `\n\n${content}\n`, "utf8");
-    } else {
-      await copyFile(sourcePath, targetPath);
-    }
-    if (targetExists) {
-      result.updated.push(toPosix(file.target));
-    } else {
-      result.created.push(toPosix(file.target));
+  // Install dotdir config files (AGENTS.md / CLAUDE.md) into each agent's user dotdir
+  for (const a of agents) {
+    for (const file of agentDotdirFiles[a]) {
+      const sourcePath = path.join(sourceRoot, file.source);
+      const dotdirBase = path.join(os.homedir(), agentSkillDirName[a]);
+      const targetPath = path.join(dotdirBase, file.target);
+      const targetExists = existsSync(targetPath);
+      await mkdir(path.dirname(targetPath), { recursive: true });
+      if (targetExists && file.mode === "append") {
+        const content = (await readFile(sourcePath, "utf8")).trimEnd();
+        await appendFile(targetPath, `\n\n${content}\n`, "utf8");
+      } else {
+        await copyFile(sourcePath, targetPath);
+      }
+      const displayPath = toPosix(path.relative(os.homedir(), targetPath));
+      if (targetExists) {
+        result.updated.push(displayPath);
+      } else {
+        result.created.push(displayPath);
+      }
     }
   }
 
@@ -416,16 +418,6 @@ async function handlePackage(rest: string[]): Promise<void> {
   const format = getStringFlag(args, "format") === "json" ? "json" : "markdown";
   const result = await buildContextPackage({ rootDir: process.cwd(), taskId, role, format });
   printResult(`Built context package ${result.packagePath}`, result);
-}
-
-function uniqueConfigFiles(files: AgentConfigFile[]): AgentConfigFile[] {
-  const byTarget = new Map<string, AgentConfigFile>();
-  for (const file of files) {
-    if (!byTarget.has(file.target)) {
-      byTarget.set(file.target, file);
-    }
-  }
-  return [...byTarget.values()];
 }
 
 function findAgentConfigRoot(): string {

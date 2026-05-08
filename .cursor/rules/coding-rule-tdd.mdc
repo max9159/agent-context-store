@@ -1,0 +1,90 @@
+---
+description: TDD workflow for this pnpm monorepo — write or update tests first, build, confirm red, fix, confirm green, run full suite.
+globs: src/**/*.ts
+alwaysApply: false
+---
+
+# TDD Workflow
+
+Always follow a test-first cycle for every code change in this repo.
+
+## Cycle
+
+1. **Identify the spec file** — every feature or CLI command maps to a file in `src/test/`:
+   - CLI commands / flags → `src/test/cli.spec.ts`
+   - `install-skills` / `install-agent-config` → `src/test/install-skills.spec.ts`
+   - Core library functions → `src/test/core.spec.ts`
+   - Multi-step integration scenarios → `src/test/integration.spec.ts`
+
+2. **Write or update the test first** — before touching source code:
+   - If fixing a bug: update the existing test that currently asserts the wrong behaviour.
+   - If adding a feature: add a new `describe` / `test` block that will fail until the code exists.
+   - If a gap is found: add the missing assertion (see "Coverage gaps" below).
+
+3. **Build + confirm red**
+   ```bash
+   pnpm build && node --experimental-strip-types --test src/test/<spec>.spec.ts
+   ```
+   The new/updated test must fail before the fix is applied.
+
+4. **Implement the fix or feature** in source.
+
+5. **Build + confirm green**
+   ```bash
+   pnpm build && node --experimental-strip-types --test src/test/<spec>.spec.ts
+   ```
+
+6. **Run the full suite** — always the final step before declaring work done:
+   ```bash
+   pnpm test
+   ```
+
+## Test patterns for this repo
+
+Tests use Node's built-in `node:test` runner. Import helpers from `src/test/helpers.ts`:
+
+```typescript
+import { makeTempDir, cleanupTempDir, runCli, exists, readText, isolatedEnv } from "./helpers.ts";
+```
+
+| Helper | Use for |
+|---|---|
+| `makeTempDir(prefix)` | Create an isolated temp project dir |
+| `cleanupTempDir(dir)` | Remove it in `after()` |
+| `isolatedEnv(home)` | Override HOME/APPDATA so CLI writes to a throw-away dir — **required** for any test that touches `~/.cursor`, `~/.claude`, or `~/.codex` |
+| `runCli(args, { cwd, env })` | Run the compiled CLI synchronously |
+| `exists(path)` | Assert a file was created |
+| `readText(path)` | Read file content for append/replace assertions |
+
+Standard `before` / `after` structure:
+
+```typescript
+describe("install-skills --agent cursor", () => {
+  let dir: string;
+  let home: string;
+  before(() => {
+    dir = makeTempDir("acs-is-cursor-");
+    home = makeTempDir("acs-is-cursor-home-");
+  });
+  after(() => { cleanupTempDir(dir); cleanupTempDir(home); });
+
+  test("exits 0 and creates ~/.cursor/AGENTS.md", () => {
+    const r = runCli(["install-skills", "--agent", "cursor"], { cwd: dir, env: isolatedEnv(home) });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(home, ".cursor/AGENTS.md")));
+  });
+});
+```
+
+## Coverage gaps to add when relevant
+
+When a behaviour change touches dotdir config files (`AGENTS.md`, `CLAUDE.md`):
+- Assert the file is created at the **user dotdir** (`~/.cursor/`, `~/.claude/`, `~/.codex/`), not the project root.
+- Add an **append** test: pre-seed the file, run the CLI, assert both old and new content exist.
+- For `--agent all`: assert all three dotdir config files are created in a single test.
+
+## What NOT to do
+
+- Do not run the full suite to verify a single file change — run only the relevant spec first.
+- Do not write tests that assert the **project root** (`dir`) for files that belong in the user dotdir.
+- Do not skip `isolatedEnv` — without it, tests pollute the real `~/.cursor` / `~/.claude` / `~/.codex`.
