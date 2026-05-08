@@ -74,6 +74,12 @@ export interface InitOptions {
   rootDir: string;
   /** Defaults to "in-repo". */
   mode?: StoreMode;
+  /**
+   * For dedicated mode only: the project directory that is linking to the store.
+   * When provided (and different from rootDir), a .acs/config.yaml pointer is
+   * written in this directory so that `acs status` resolves correctly from it.
+   */
+  projectDir?: string;
 }
 
 export interface CreateArtifactOptions {
@@ -379,6 +385,9 @@ function resolveStoreContext(inputDir: string): StoreContext {
       if (cfg["mode"] === "local" && typeof cfg["store_path"] === "string") {
         return { projectDir, storeDir: cfg["store_path"] as string, mode: "local" };
       }
+      if (cfg["mode"] === "dedicated" && typeof cfg["store_path"] === "string") {
+        return { projectDir, storeDir: cfg["store_path"] as string, mode: "dedicated" };
+      }
     } catch {
       // parse error — treat as in-repo
     }
@@ -515,6 +524,14 @@ export async function initContextStore(options: InitOptions): Promise<AcsResult>
     storeDir = path.join(projectDir, ".acs");
   } else if (mode === "dedicated") {
     storeDir = projectDir;
+    // If the caller is a project dir separate from the store, write a pointer
+    // so that `acs status` (and other commands) resolve correctly from that dir.
+    const callerDir = options.projectDir ? path.resolve(options.projectDir) : null;
+    if (callerDir && callerDir !== storeDir) {
+      const pointerPath = path.join(callerDir, ".acs", "config.yaml");
+      const pointerContent = `version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\nstore_path: ${storeDir.replaceAll("\\", "/")}\n`;
+      await writeIfMissingRaw(pointerPath, pointerContent, result, ".acs/config.yaml");
+    }
   } else {
     const slug = computeProjectSlug(projectDir);
     storeDir = path.join(getLocalBaseDir(), "stores", slug);

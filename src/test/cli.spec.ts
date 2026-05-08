@@ -102,6 +102,31 @@ describe("acs init --mode dedicated", () => {
   });
 });
 
+// ─── acs init --mode dedicated <storePath> from a project dir ─────────────────
+
+describe("acs init --mode dedicated with separate project dir", () => {
+  let projectDir: string;
+  let storeDir: string;
+  before(() => {
+    projectDir = makeTempDir("acs-cli-init-ded-proj-");
+    storeDir = makeTempDir("acs-cli-init-ded-store-");
+  });
+  after(() => { cleanupTempDir(projectDir); cleanupTempDir(storeDir); });
+
+  test("writes .acs/config.yaml pointer in the project dir", () => {
+    const r = runCli(["init", "--mode", "dedicated", storeDir], { cwd: projectDir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(projectDir, ".acs", "config.yaml")), ".acs/config.yaml should exist in project dir");
+  });
+
+  test("acs status from project dir shows dedicated mode and initialized", () => {
+    const s = runCli(["status"], { cwd: projectDir });
+    assert.equal(s.status, 0, `stderr: ${s.stderr}`);
+    assert.ok(s.stdout.includes("dedicated"), `expected dedicated in status output, got:\n${s.stdout}`);
+    assert.ok(s.stdout.includes("initialized  yes") || s.stdout.includes("initialized yes"), `expected initialized yes, got:\n${s.stdout}`);
+  });
+});
+
 // ─── acs init --mode local ────────────────────────────────────────────────────
 
 describe("acs init --mode local", () => {

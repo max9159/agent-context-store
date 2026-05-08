@@ -97,7 +97,10 @@ async function main(argv: string[]): Promise<void> {
     if (isNonInteractive) {
       const rootDir = pathArg || process.cwd();
       const mode = (modeArg as StoreMode) ?? "in-repo";
-      const result = await initContextStore({ rootDir, mode });
+      // For dedicated mode with an explicit path, record the caller's cwd as
+      // the project dir so a .acs/config.yaml pointer is written there.
+      const projectDir = (mode === "dedicated" && pathArg) ? process.cwd() : undefined;
+      const result = await initContextStore({ rootDir, mode, projectDir });
       const label = modeArg ? `Initialized context store (mode: ${mode})` : "Initialized context store";
       printResult(label, result);
       return;
@@ -249,11 +252,12 @@ async function runInitWizard(): Promise<void> {
   });
 
   // Step 2 — path (dedicated only)
-  let rootDir = process.cwd();
+  const wizardCwd = process.cwd();
+  let rootDir = wizardCwd;
   if (mode === "dedicated") {
     rootDir = await input({
       message: "Path to the dedicated store repo:",
-      default: process.cwd(),
+      default: wizardCwd,
       validate: (v) => v.trim().length > 0 || "Path cannot be empty",
     });
   }
@@ -289,8 +293,10 @@ async function runInitWizard(): Promise<void> {
     return;
   }
 
-  // Execute init
-  const result = await initContextStore({ rootDir, mode });
+  // Execute init — for dedicated mode with a different store path, pass the
+  // wizard's cwd so a .acs/config.yaml pointer is written in the project dir.
+  const projectDir = (mode === "dedicated" && path.resolve(rootDir) !== path.resolve(wizardCwd)) ? wizardCwd : undefined;
+  const result = await initContextStore({ rootDir, mode, projectDir });
   printResult(`Initialized context store (mode: ${mode})`, result);
 
   // Execute skill installs
