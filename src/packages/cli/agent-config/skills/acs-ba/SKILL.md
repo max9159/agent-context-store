@@ -32,7 +32,27 @@ acs validate --role ba --task TASK-123
 
 Do not proceed until validation passes.
 
-## 4. Hand Off to SA
+## 4. Request Approval
+
+Ask the user or responsible stakeholder to review and approve the BA artifacts before handoff.
+
+Do not create the SA handoff until all required BA artifacts are approved:
+
+- SRS
+- User story
+- Acceptance criteria
+
+If approval is granted, update each BA artifact frontmatter so `status: approved` and `approval_status: approved`.
+
+Then re-run validation:
+
+```bash
+acs validate --role ba --task TASK-123
+```
+
+If approval is not granted, capture the requested changes in the artifacts and repeat validation before asking again.
+
+## 5. Hand Off to SA
 
 ```bash
 acs handoff create --from ba --to sa --task TASK-123
@@ -40,14 +60,14 @@ acs package --task TASK-123 --role sa
 acs index
 ```
 
-## 5. Output Handoff Prompt
+## 6. Output Handoff Prompt
 
-End your response with this prompt for the SA agent:
+Only after approval and handoff creation succeed, end your response with this prompt for the SA agent:
 
 ```
 [HANDOFF: BA → SA | TASK-123]
 
-The BA role has completed requirements for TASK-123.
+The BA role has completed and received approval for requirements for TASK-123.
 
 Artifacts ready for you:
 - <path to SRS artifact>

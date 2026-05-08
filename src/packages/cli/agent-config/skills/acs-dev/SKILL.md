@@ -19,13 +19,14 @@ acs handoff check --from sa --to dev --task TASK-123
 acs package --task TASK-123 --role dev
 ```
 
-## 2. Create Implementation Note
+## 2. Create DEV Artifacts
 
 ```bash
 acs dev new implementation-note --task TASK-123
+acs dev new unit-test-note --task TASK-123
 ```
 
-**Fill every section immediately** — document implementation decisions, deviations from the design, and any constraints discovered during development. List consulted files under `source_refs`. Complete the Validation Checklist at the end of the file.
+**Fill every section immediately** — document implementation decisions, deviations from the design, unit test coverage, and any constraints discovered during development. List consulted files under `source_refs`. Complete the Validation Checklist at the end of each file.
 
 ## 3. Validate
 
@@ -35,7 +36,24 @@ acs validate --role dev --task TASK-123
 
 Do not proceed until validation passes.
 
-## 4. Hand Off to QA
+## 4. Mark Ready for Review
+
+Do not create the QA handoff until all required DEV artifacts are ready for review:
+
+- Implementation note
+- Unit test note
+
+Update each DEV artifact frontmatter so `status: ready_for_review`. Keep `approval_status: pending` unless a reviewer explicitly changes it.
+
+Then re-run validation:
+
+```bash
+acs validate --role dev --task TASK-123
+```
+
+If the work is not ready for review, capture the remaining tasks or blockers in the artifacts and repeat validation before handoff.
+
+## 5. Hand Off to QA
 
 ```bash
 acs handoff create --from dev --to qa --task TASK-123
@@ -43,9 +61,9 @@ acs package --task TASK-123 --role qa
 acs index
 ```
 
-## 5. Output Handoff Prompt
+## 6. Output Handoff Prompt
 
-End your response with this prompt for the QA agent:
+Only after the artifacts are marked ready for review and handoff creation succeeds, end your response with this prompt for the QA agent:
 
 ```
 [HANDOFF: DEV → QA | TASK-123]
@@ -54,14 +72,16 @@ The DEV role has completed implementation for TASK-123.
 
 Artifacts ready for you:
 - <path to implementation note>
+- <path to unit test note>
 
 Context package: <path printed by acs package>
 
 Your next steps (QA role):
 1. Read the context package above.
 2. Run: acs role explain qa --task TASK-123
-3. Create your test plan: acs qa new test-plan --task TASK-123 --title "<title>"
+3. Create QA artifacts: acs qa new test-plan --task TASK-123 --title "<title>" and acs qa new qa-signoff --task TASK-123 --title "<title>"
 4. Fill all sections, then validate: acs validate --role qa --task TASK-123
+5. After approval, mark QA artifacts approved and hand off to SA: acs handoff create --from qa --to sa --task TASK-123
 
 Open questions from DEV (resolve before or during testing):
 - <list any open questions from the implementation note>

@@ -19,34 +19,70 @@ acs handoff check --from dev --to qa --task TASK-123
 acs package --task TASK-123 --role qa
 ```
 
-## 2. Create Test Plan
+## 2. Create QA Artifacts
 
 ```bash
 acs qa new test-plan --task TASK-123 --title "Feature test plan"
+acs qa new qa-signoff --task TASK-123 --title "Feature QA signoff"
 ```
 
-**Fill every section immediately** — document test scope, test cases, acceptance criteria, and any risks. List consulted files under `source_refs`. Complete the Validation Checklist at the end of the file.
+**Fill every section immediately** — document test scope, test cases, acceptance criteria, signoff decision, and any risks. List consulted files under `source_refs`. Complete the Validation Checklist at the end of each file.
 
 ## 3. Validate
 
 ```bash
 acs validate --role qa --task TASK-123
+```
+
+Do not proceed until validation passes.
+
+## 4. Request Approval
+
+Ask the user or responsible stakeholder to review and approve the QA artifacts before handoff.
+
+Do not create the SA handoff until all required QA artifacts are approved:
+
+- Test plan
+- QA signoff
+
+If approval is granted, update each QA artifact frontmatter so `status: approved` and `approval_status: approved`.
+
+Then re-run validation:
+
+```bash
+acs validate --role qa --task TASK-123
+```
+
+If approval is not granted, capture the requested changes in the artifacts and repeat validation before asking again.
+
+## 5. Hand Off to SA
+
+```bash
+acs handoff create --from qa --to sa --task TASK-123
+acs package --task TASK-123 --role sa
 acs index
 ```
 
-## 4. Output Completion Report
+## 6. Output Handoff Prompt
 
-QA is the final role in the workflow. End your response with a completion summary:
+Only after approval and handoff creation succeed, end your response with this prompt for the SA agent:
 
 ```
-[COMPLETE: QA | TASK-123]
+[HANDOFF: QA → SA | TASK-123]
 
-QA has completed the test plan for TASK-123.
+The QA role has completed and received approval for QA validation for TASK-123.
 
-Artifacts produced:
+Artifacts ready for you:
 - <path to test plan>
+- <path to QA signoff>
 
-Full artifact index: run `acs index` to view all artifacts and handoffs for this task.
+Context package: <path printed by acs package>
+
+Your next steps (SA role):
+1. Read the context package above.
+2. Run: acs role explain sa --task TASK-123
+3. Create the release readiness report: acs sa new release-readiness-report --task TASK-123 --title "<title>"
+4. Fill all sections, then validate: acs validate --role sa --task TASK-123
 
 Outstanding issues or risks:
 - <list any issues found during QA, or "None">
