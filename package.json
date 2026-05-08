@@ -16,10 +16,22 @@
     "smoke": "node src/packages/cli/dist/index.js --help"
   },
   "keywords": [
+    "ai",
     "ai-agent",
-    "context",
+    "ai-agents",
+    "agentic-engineering",
+    "multi-agent",
+    "agent-handoff",
     "handoff",
+    "agent-orchestration",
+    "agent-workflow",
+    "agent-interoperability",
+    "a2a",
+    "context",
+    "context-store",
     "sdlc",
+    "schema-validated",
+    "git-backed",
     "cli"
   ],
   "engines": {

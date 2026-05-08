@@ -4,6 +4,20 @@
   "description": "Core library for Agent Context Store Toolkit.",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "ai",
+    "ai-agent",
+    "ai-agents",
+    "agentic-engineering",
+    "multi-agent",
+    "agent-handoff",
+    "a2a",
+    "context",
+    "context-store",
+    "sdlc",
+    "schema-validated",
+    "git-backed"
+  ],
   "homepage": "https://github.com/max9159/agent-context-store#readme",
   "repository": {
     "type": "git",
