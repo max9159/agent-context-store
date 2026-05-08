@@ -1,8 +1,54 @@
-# Agent Context Store Toolkit
+# Agent Context Store
 
-Agent Context Store Toolkit (`acs`) is a Git-backed, schema-validated artifact handoff toolkit for AI agents.
+Agent Context Store (`acs`) is a Git-backed, schema-validated handoff toolkit that gives each AI agent role (BA, SA, Dev, QA) a structured way to produce, validate, and pass SDLC artifacts to the next role.
 
-It helps Cursor, Claude Code, OpenClaw, Codex, CI pipelines, and custom agent runtimes write durable SDLC context into a user-owned repository. The toolkit creates requirements, design docs, ADRs, API notes, test plans, handoff records, validation reports, and role-specific context packages, push to your own repository.
+Each role agent writes schema-validated documents — SRS, design docs, ADRs, API specs, test plans — with structured frontmatter into a Git-tracked store. A validated handoff record acts as the contract between agents; the receiving agent packages and reads it before starting work. Works with Cursor, Claude Code, Codex, CI pipelines, and any custom agent runtime.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    DEV(["Developer"])
+    BA(["Business Analyst"])
+    SA(["Solution Architect"])
+
+    subgraph PROJECT["Project Repository"]
+        CODE["Source Code\n(your codebase)"]
+    end
+    subgraph AGENT["AI Agent Runtime  —  Cursor · Claude Code · Codex"]
+        AI["AI Agent Sessions"]
+        SKILLS["Agent Skill Files\nSKILL.md · AGENTS.md · CLAUDE.md"]
+
+    end
+
+    subgraph ACS["Agent Context Store  (acs)"]
+        CLI["acs CLI\nnpm global binary"]
+        CORE["acs Core Library\nstore resolution · policy · artifacts · handoff · packaging"]
+    end
+
+    subgraph DEDICATED["Dedicated Context Store Repo"]
+        STORE[("Shared Store\nartifacts · handoffs · packages · index.json")]
+    end
+
+    BA -->|"prompts to write requirements"| AI
+    SA -->|"prompts to write system design"| AI
+    DEV -->|"prompts to implement feature"| AI
+    CLI -->|"acs install-skills"| SKILLS
+    AI -->|"reads & edits code"| CODE
+    AI -->|"reads on session start"| SKILLS
+    AI -->|"acs new · handoff · package · validate"| CLI
+    CLI -->|"delegates all store ops"| CORE
+    CORE -->|"writes SRS · design docs · ADRs · handoffs (schema-validated)"| STORE
+    STORE -->|"reads artifacts · packages · index"| CORE
+```
+
+| Step | What happens |
+|------|--------------|
+| **1 · Install skills** | `acs install-skills` copies `SKILL.md` / `AGENTS.md` / `CLAUDE.md` into each agent's config directory — teaches the agent which role commands to run. |
+| **2 · Agent reads skills** | On task start the agent reads its skill file to learn the `acs` command set and the BA→SA→Dev→QA handoff chain. |
+| **3 · Agent creates artifacts** | Each role agent calls `acs <role> new` to produce schema-validated artifacts with structured frontmatter (task ID, role, type, status, timestamps). |
+| **4 · Structured handoff** | On completion, the agent calls `acs handoff create` to produce a validated YAML handoff record — the contract the next agent must check (`acs handoff check`) and package (`acs package`) before starting. |
+| **5 · Store persists context** | All artifacts, handoff records, and role packages are written to the dedicated Git-tracked store and shared across all role agents and CI pipelines. |
 
 ## Prerequisites
 - Node.js `>=20`
