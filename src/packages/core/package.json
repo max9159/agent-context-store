@@ -4,6 +4,11 @@
   "description": "Core library for Agent Context Store Toolkit.",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/max9159/agent-context-store#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/max9159/agent-context-store.git"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
