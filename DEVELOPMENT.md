@@ -131,3 +131,86 @@ pnpm test      # build then run the test suite
 pnpm check     # alias for pnpm test
 pnpm smoke     # verify the CLI starts
 ```
+
+## Releasing
+
+Releases are driven by `.github/workflows/release.yml` (manual `workflow_dispatch`).
+The workflow bumps `package.json` versions in all three packages, builds, runs
+the test suite, publishes both `agent-context-store-core` and
+`agent-context-store` to npm, then commits + tags + pushes.
+
+Pick a release type when you trigger the workflow:
+
+| Type    | Example bump                | npm dist-tag | Pushes to `main`?      |
+|---------|-----------------------------|--------------|------------------------|
+| `patch` | `0.2.10` → `0.2.11`         | `latest`     | yes (commit + tag)     |
+| `minor` | `0.2.10` → `0.3.0`          | `latest`     | yes (commit + tag)     |
+| `major` | `0.2.10` → `1.0.0`          | `latest`     | yes (commit + tag)     |
+| `beta`  | `0.2.10` → `0.2.11-beta.0`  | `beta`       | tag only, no `main` commit |
+
+Beta releases never claim the `latest` dist-tag, so users on `npm i agent-context-store`
+keep getting the stable line. They have to opt in with `npm i agent-context-store@beta`.
+
+### Trigger a release
+
+**GitHub UI**
+
+1. Open **Actions → Release** and click **Run workflow**.
+2. Pick the branch (usually `main`).
+3. Pick **Release type**: `patch` / `minor` / `major` / `beta`.
+4. **Run workflow**.
+
+**GitHub CLI**
+
+```bash
+gh workflow run release.yml -f release_type=patch     # default; cuts a stable patch
+gh workflow run release.yml -f release_type=minor
+gh workflow run release.yml -f release_type=major
+gh workflow run release.yml -f release_type=beta      # publishes under @beta
+```
+
+### Beta train semantics
+
+Repeated `beta` runs increment the prerelease counter:
+
+```
+0.2.11-beta.0 → 0.2.11-beta.1 → 0.2.11-beta.2 ...
+```
+
+Run with `release_type=patch` to **graduate** a beta — the workflow drops the
+`-beta.N` suffix without bumping the patch (e.g. `0.2.11-beta.3` → `0.2.11`)
+and publishes it as `latest`.
+
+### Verify after a release
+
+```bash
+npm dist-tag ls agent-context-store
+# latest: 0.2.11
+# beta:   0.2.12-beta.0
+npm view agent-context-store version
+npm view agent-context-store-core version
+```
+
+If `latest` ever shows a beta version, the workflow published without `--tag beta` —
+check the **Publish core / Publish cli** step logs for the `--tag` argument.
+
+### Required secrets
+
+- `NPM_TOKEN` — npm publish token with write access to both packages.
+- `GITHUB_TOKEN` is provided automatically; the workflow uses it to push the
+  commit + tag back to `main`.
+
+### Consumer install commands
+
+```bash
+# Stable users — unchanged
+npm i agent-context-store
+pnpm add agent-context-store
+
+# Beta testers
+npm i agent-context-store@beta
+pnpm add agent-context-store@beta
+
+# Pin to an exact prerelease
+npm i agent-context-store@0.2.11-beta.0
+```

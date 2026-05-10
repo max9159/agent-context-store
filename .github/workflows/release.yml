@@ -2,6 +2,17 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - beta
 
 permissions:
   contents: write
@@ -26,14 +37,35 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Bump patch version
+      - name: Bump version
         id: bump
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
         run: |
-          OLD=$(node -p "require('./package.json').version")
-          NEW=$(node -p "
-            const [a, b, c] = '$OLD'.split('.').map(Number);
-            [a, b, c + 1].join('.')
+          export OLD=$(node -p "require('./package.json').version")
+          NEW=$(node -e "
+            const old = process.env.OLD;
+            const type = process.env.RELEASE_TYPE;
+            const m = old.match(/^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?\$/);
+            if (!m) { throw new Error('Unparseable version: ' + old); }
+            let [_, a, b, c, beta] = m;
+            a = +a; b = +b; c = +c;
+            let next;
+            // Graduating from a prerelease: keep the same MAJOR.MINOR.PATCH,
+            // just drop the -beta.N suffix. Otherwise bump as usual.
+            if (type === 'major')      next = [a + 1, 0, 0].join('.');
+            else if (type === 'minor') next = [a, b + 1, 0].join('.');
+            else if (type === 'patch') next = beta !== undefined ? [a, b, c].join('.') : [a, b, c + 1].join('.');
+            else if (type === 'beta') {
+              // continue an existing beta train, or start a new one off the next patch
+              if (beta !== undefined) next = [a, b, c].join('.') + '-beta.' + (+beta + 1);
+              else                    next = [a, b, c + 1].join('.') + '-beta.0';
+            } else throw new Error('Unknown release_type: ' + type);
+            console.log(next);
           ")
+
+          DIST_TAG=latest
+          [ "$RELEASE_TYPE" = beta ] && DIST_TAG=beta
 
           node -e "
             const fs = require('fs');
@@ -50,7 +82,8 @@ jobs:
           "
 
           echo "version=$NEW" >> $GITHUB_OUTPUT
-          echo "Bumped $OLD → $NEW"
+          echo "dist_tag=$DIST_TAG" >> $GITHUB_OUTPUT
+          echo "Bumped $OLD → $NEW (dist-tag: $DIST_TAG)"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -62,18 +95,18 @@ jobs:
         run: pnpm test
 
       - name: Dry run — core
-        run: pnpm --filter "agent-context-store-core" publish --dry-run --no-git-checks
+        run: pnpm --filter "agent-context-store-core" publish --tag ${{ steps.bump.outputs.dist_tag }} --dry-run --no-git-checks
 
       - name: Dry run — cli
-        run: pnpm --filter "agent-context-store" publish --dry-run --no-git-checks
+        run: pnpm --filter "agent-context-store" publish --tag ${{ steps.bump.outputs.dist_tag }} --dry-run --no-git-checks
 
       - name: Publish core
-        run: pnpm --filter "agent-context-store-core" publish --no-git-checks
+        run: pnpm --filter "agent-context-store-core" publish --tag ${{ steps.bump.outputs.dist_tag }} --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish cli
-        run: pnpm --filter "agent-context-store" publish --no-git-checks
+        run: pnpm --filter "agent-context-store" publish --tag ${{ steps.bump.outputs.dist_tag }} --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -91,9 +124,16 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Commit, tag, and push
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
         run: |
           VERSION=${{ steps.bump.outputs.version }}
           git add package.json src/packages/core/package.json src/packages/cli/package.json
           git commit -m "chore: release v$VERSION"
           git tag "v$VERSION"
-          git push origin main --tags
+          if [ "$RELEASE_TYPE" = "beta" ]; then
+            # beta: tag only, do not move main forward
+            git push origin "v$VERSION"
+          else
+            git push origin main --tags
+          fi
