@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -13,6 +13,19 @@ export type StoreMode = "in-repo" | "local" | "dedicated";
 
 export type ArtifactType = string;
 
+/**
+ * Validation/handoff policy strictness.
+ * - "strict"  (default): upstream artifacts are required; missing inputs are errors.
+ * - "relaxed": missing upstream inputs are warnings + AI hints, allowing any role
+ *              to be a workflow entry point.
+ */
+export type AcsMode = "strict" | "relaxed";
+
+export interface AcsHint {
+  for: "ai" | "human";
+  message: string;
+}
+
 export interface AcsResult {
   created: string[];
   updated: string[];
@@ -25,6 +38,8 @@ export interface ValidationResult {
   warnings: string[];
   artifacts: ArtifactRecord[];
   handoffs: string[];
+  hints?: AcsHint[];
+  mode?: AcsMode;
 }
 
 export interface RoleExplanation {
@@ -47,6 +62,36 @@ export interface NextActionsResult {
   requiredInputs: Array<{ type: string; found: boolean }>;
   suggestedOutputs: string[];
   suggestedCommands: string[];
+  mode?: AcsMode;
+  hints?: AcsHint[];
+}
+
+export interface TaskOverview {
+  taskId: string;
+  rolesWithArtifacts: string[];
+  artifactCount: number;
+  suggestedNextRole: string;
+  isEntry: boolean;
+}
+
+export interface AuditLogEvent {
+  ts?: string;
+  action: string;
+  role?: string;
+  task_id?: string;
+  artifact?: string;
+  handoff?: string;
+  from?: string;
+  to?: string;
+  session_id?: string;
+  mode?: AcsMode;
+  [key: string]: unknown;
+}
+
+export interface ReadTaskLogOptions {
+  rootDir: string;
+  taskId: string;
+  tail?: number;
 }
 
 export interface ArtifactRecord {
@@ -95,6 +140,7 @@ export interface CreateHandoffOptions {
   fromRole: string;
   toRole: string;
   taskId: string;
+  mode?: AcsMode;
 }
 
 export interface BuildContextPackageOptions {
@@ -114,6 +160,7 @@ export interface NextActionsOptions {
   rootDir: string;
   role: string;
   taskId: string;
+  mode?: AcsMode;
 }
 
 export interface CheckHandoffOptions {
@@ -121,6 +168,7 @@ export interface CheckHandoffOptions {
   fromRole: string;
   toRole: string;
   taskId: string;
+  mode?: AcsMode;
 }
 
 export interface ListHandoffsOptions {
@@ -134,6 +182,7 @@ export interface ValidateScopeOptions {
   role?: string;
   taskId?: string;
   artifactPath?: string;
+  mode?: AcsMode;
 }
 
 // ─── Internal types ──────────────────────────────────────────────────────────
@@ -336,6 +385,10 @@ const defaultPolicy: AcsPolicy = {
       { id: "release-readiness", name: "Release Readiness", owner: "sa", inputs: ["implementation-note", "test-plan", "qa-signoff"], outputs: ["release-readiness-report"], next: [] }
     ],
     handoffRules: [
+      { from: "system", to: "ba", requiredArtifacts: [], requiredState: "any" },
+      { from: "system", to: "sa", requiredArtifacts: [], requiredState: "any" },
+      { from: "system", to: "dev", requiredArtifacts: [], requiredState: "any" },
+      { from: "system", to: "qa", requiredArtifacts: [], requiredState: "any" },
       { from: "ba", to: "sa", requiredArtifacts: ["srs", "user-story", "acceptance-criteria"], requiredState: "approved" },
       { from: "sa", to: "dev", requiredArtifacts: ["srs", "sdd", "adr", "api-design"], requiredState: "approved" },
       { from: "dev", to: "qa", requiredArtifacts: ["implementation-note", "unit-test-note"], requiredState: "ready_for_review" },
@@ -660,11 +713,29 @@ export async function getNextActions(options: NextActionsOptions): Promise<NextA
   if (!stage) {
     throw new Error(`No workflow stage found for role "${options.role}"`);
   }
+  const mode: AcsMode = options.mode ?? "strict";
   const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
   const artifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
   const foundTypes = new Set(artifacts.map((artifact) => canonicalArtifactType(policy, artifact.type)));
   const requiredInputs = stage.inputs.map((type) => ({ type, found: foundTypes.has(type) }));
   const profile = findRole(policy, role);
+  const hints: AcsHint[] = [];
+  const missingInputs = requiredInputs.filter((item) => !item.found).map((item) => item.type);
+  const isEntry = artifacts.length === 0;
+
+  if (isEntry && mode === "relaxed") {
+    hints.push({
+      for: "ai",
+      message: `No artifacts exist for task "${options.taskId}". You are the entry role. First create the synthetic entry handoff: acs handoff create --from system --to ${role} --task ${options.taskId} --mode relaxed`
+    });
+  }
+  if (missingInputs.length > 0 && mode === "strict") {
+    hints.push({
+      for: "ai",
+      message: `Upstream artifacts missing for "${role}" (${missingInputs.join(", ")}). If this is a fresh start, re-run with --mode relaxed.`
+    });
+  }
+
   return {
     role,
     taskId: options.taskId,
@@ -675,7 +746,9 @@ export async function getNextActions(options: NextActionsOptions): Promise<NextA
       `acs package --role ${role} --task ${options.taskId}`,
       ...stage.outputs.map((type) => `acs ${role} new ${type} --task ${options.taskId}`),
       ...(profile?.handoffTargets ?? []).map((target) => `acs handoff create --from ${role} --to ${target} --task ${options.taskId}`)
-    ]
+    ],
+    mode,
+    ...(hints.length > 0 ? { hints } : {})
   };
 }
 
@@ -719,7 +792,12 @@ export async function createArtifact(options: CreateArtifactOptions): Promise<Ac
     DATE: today()
   });
   await writeFile(targetPath, content, "utf8");
-  await appendAudit(storeDir, `created artifact ${storeRelPath}`);
+  await appendAudit(storeDir, {
+    action: "artifact.create",
+    role: role ?? definition.owner,
+    task_id: options.taskId,
+    artifact: storeRelPath
+  });
 
   const resultPath = toResultPath(storeDir, projectDir, storeRelPath);
   return { ...emptyResult(), artifactPath: resultPath, artifactId, created: [resultPath] };
@@ -800,6 +878,8 @@ export async function validateContextStore(rootDirInput: string): Promise<Valida
 
 export async function validatePolicyScope(options: ValidateScopeOptions): Promise<ValidationResult> {
   const result = await validateContextStore(options.rootDir);
+  const mode: AcsMode = options.mode ?? "strict";
+  const hints: AcsHint[] = [];
   const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
   const policy = await loadPolicy(options.rootDir);
   const role = options.role ? canonicalRole(policy, options.role) : undefined;
@@ -811,16 +891,45 @@ export async function validatePolicyScope(options: ValidateScopeOptions): Promis
   if (options.taskId) {
     const taskArtifacts = result.artifacts.filter((artifact) => artifact.id.includes(options.taskId!) || artifact.path.includes(options.taskId!));
     if (taskArtifacts.length === 0) {
-      result.errors.push(`No artifacts found for task "${options.taskId}"`);
+      const noArtifactsMsg = `No artifacts found for task "${options.taskId}"`;
+      if (mode === "relaxed") {
+        result.warnings.push(noArtifactsMsg);
+        hints.push({
+          for: "ai",
+          message: `Task "${options.taskId}" has no artifacts yet. As entry role "${role ?? "<role>"}", create the first artifact: acs ${role ?? "<role>"} new <type> --task ${options.taskId}`
+        });
+      } else {
+        result.errors.push(noArtifactsMsg);
+      }
     }
 
     if (role) {
       const stage = policy.workflow.stages.find((item) => item.owner === role);
       if (stage) {
         const foundTypes = new Set(taskArtifacts.map((artifact) => canonicalArtifactType(policy, artifact.type)));
+        const missing: string[] = [];
         for (const requiredType of stage.inputs) {
           if (!foundTypes.has(requiredType)) {
-            result.errors.push(`Missing required input for role "${role}" on task "${options.taskId}": ${requiredType}`);
+            missing.push(requiredType);
+          }
+        }
+        if (missing.length > 0) {
+          if (mode === "relaxed") {
+            for (const type of missing) {
+              result.warnings.push(`Upstream input not present for role "${role}" on task "${options.taskId}": ${type} (allowed in relaxed mode)`);
+            }
+            hints.push({
+              for: "ai",
+              message: `Starting at role "${role}" without upstream artifacts (${missing.join(", ")}) is allowed in relaxed mode. Run 'acs role explain ${role} --task ${options.taskId}' for the standalone checklist, then create the synthetic entry handoff with: acs handoff create --from system --to ${role} --task ${options.taskId} --mode relaxed`
+            });
+          } else {
+            for (const type of missing) {
+              result.errors.push(`Missing required input for role "${role}" on task "${options.taskId}": ${type}`);
+            }
+            hints.push({
+              for: "ai",
+              message: `If "${role}" is the entry role for this task, re-run with --mode relaxed (e.g. 'acs validate --role ${role} --task ${options.taskId} --mode relaxed').`
+            });
           }
         }
       }
@@ -840,7 +949,12 @@ export async function validatePolicyScope(options: ValidateScopeOptions): Promis
     }
   }
 
-  return { ...result, valid: result.errors.length === 0 };
+  return {
+    ...result,
+    valid: result.errors.length === 0,
+    mode,
+    ...(hints.length > 0 ? { hints } : {})
+  };
 }
 
 export async function createHandoff(options: CreateHandoffOptions): Promise<AcsResult & { handoffPath: string; handoffId: string }> {
@@ -879,7 +993,14 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<AcsR
   });
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, yaml, "utf8");
-  await appendAudit(storeDir, `created handoff ${storeRelPath}`);
+  await appendAudit(storeDir, {
+    action: "handoff.create",
+    from: fromRole,
+    to: toRole,
+    task_id: options.taskId,
+    handoff: storeRelPath,
+    mode: options.mode ?? "strict"
+  });
 
   const resultPath = toResultPath(storeDir, projectDir, storeRelPath);
   return { ...emptyResult(), handoffPath: resultPath, handoffId, created: [resultPath] };
@@ -1008,7 +1129,12 @@ export async function buildContextPackage(options: BuildContextPackageOptions): 
     await writeFile(targetPath, body, "utf8");
   }
 
-  await appendAudit(storeDir, `built context package ${packageStoreRel}`);
+  await appendAudit(storeDir, {
+    action: "package.build",
+    role,
+    task_id: options.taskId,
+    artifact: packageStoreRel
+  });
   const resultPath = toResultPath(storeDir, projectDir, packageStoreRel);
   return { ...emptyResult(), packagePath: resultPath, created: [resultPath] };
 }
@@ -1023,7 +1149,7 @@ export async function buildIndex(rootDirInput: string): Promise<AcsResult & { ar
   };
   await mkdir(storeDir, { recursive: true });
   await writeFile(path.join(storeDir, "index.json"), JSON.stringify(index, null, 2), "utf8");
-  await appendAudit(storeDir, "rebuilt index");
+  await appendAudit(storeDir, { action: "index.rebuild" });
   const resultPath = toResultPath(storeDir, projectDir, "index.json");
   return { ...emptyResult(), updated: [resultPath], artifactCount: validation.artifacts.length, handoffCount: validation.handoffs.length };
 }
@@ -1114,12 +1240,26 @@ async function checkHandoffPolicy(options: CheckHandoffOptions): Promise<Validat
   const policy = await loadPolicy(options.rootDir);
   const fromRole = canonicalRole(policy, options.fromRole);
   const toRole = canonicalRole(policy, options.toRole);
+  const mode: AcsMode = options.mode ?? "strict";
   const errors: string[] = [];
   const warnings: string[] = [];
+  const hints: AcsHint[] = [];
   const rule = policy.workflow.handoffRules.find((item) => item.from === fromRole && item.to === toRole);
   if (!rule) {
-    errors.push(`No handoff rule configured for ${fromRole} -> ${toRole}`);
-    return { valid: false, errors, warnings, artifacts: [], handoffs: [] };
+    const validFrom = policy.workflow.handoffRules
+      .filter((item) => item.from === fromRole)
+      .map((item) => `${item.from}->${item.to}`);
+    const lines = [
+      `No handoff rule configured for ${fromRole} -> ${toRole}.`,
+      validFrom.length > 0 ? `Valid transitions from ${fromRole}: ${validFrom.join(", ")}` : `No transitions configured from ${fromRole}.`,
+      `To start a fresh task at ${toRole}, use: acs handoff create --from system --to ${toRole} --task ${options.taskId} --mode relaxed`
+    ];
+    errors.push(lines.join("\n"));
+    hints.push({
+      for: "ai",
+      message: `If "${toRole}" is the entry role, create a synthetic entry handoff: acs handoff create --from system --to ${toRole} --task ${options.taskId} --mode relaxed`
+    });
+    return { valid: false, errors, warnings, artifacts: [], handoffs: [], mode, hints };
   }
 
   const artifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
@@ -1135,12 +1275,22 @@ async function checkHandoffPolicy(options: CheckHandoffOptions): Promise<Validat
     }
   }
 
+  if (fromRole === "system" && mode === "relaxed") {
+    warnings.push(`Synthetic entry handoff: ${fromRole} -> ${toRole} (relaxed mode).`);
+    hints.push({
+      for: "ai",
+      message: `Entry handoff accepted. Now create the first artifact: acs ${toRole} new <type> --task ${options.taskId}`
+    });
+  }
+
   return {
     valid: errors.length === 0,
     errors,
     warnings,
     artifacts,
-    handoffs: await listHandoffs({ rootDir: options.rootDir, taskId: options.taskId })
+    handoffs: await listHandoffs({ rootDir: options.rootDir, taskId: options.taskId }),
+    mode,
+    ...(hints.length > 0 ? { hints } : {})
   };
 }
 
@@ -1156,6 +1306,9 @@ function assertSafeStoreRelPath(relPath: string, label: string): void {
 }
 
 function artifactSatisfiesRequiredState(artifact: ArtifactRecord, requiredState: string): boolean {
+  if (requiredState === "any") {
+    return true;
+  }
   return artifact.status === requiredState || artifact.approvalStatus === requiredState;
 }
 
@@ -1347,8 +1500,9 @@ function stringifyWorkflow(policy: AcsPolicy): string {
     ...policy.workflow.handoffRules.flatMap((rule) => [
       `  - from: ${rule.from}`,
       `    to: ${rule.to}`,
-      "    required_artifacts:",
-      ...rule.requiredArtifacts.map((item) => `      - ${item}`),
+      ...(rule.requiredArtifacts.length > 0
+        ? ["    required_artifacts:", ...rule.requiredArtifacts.map((item) => `      - ${item}`)]
+        : ["    required_artifacts: []"]),
       `    required_state: ${rule.requiredState}`
     ]),
     ""
@@ -1638,7 +1792,12 @@ function collectHandoffStructuralErrors(storeDir: string, label: string, handoff
     return;
   }
 
-  if (requiredArtifacts.length === 0) {
+  // Synthetic entry handoffs (from_role: "system") legitimately have no
+  // upstream artifacts — they exist purely to record the workflow entry point
+  // when a non-BA role starts a fresh task in relaxed mode.
+  const fromRoleValue = handoff["from_role"];
+  const isSyntheticEntry = typeof fromRoleValue === "string" && fromRoleValue.toLowerCase() === "system";
+  if (requiredArtifacts.length === 0 && !isSyntheticEntry) {
     errors.push(`${label}: artifacts.required must include at least one artifact`);
   }
 
@@ -1879,13 +2038,120 @@ function findToolkitRoot(): string {
   throw new Error("Could not locate agent-context-store src/assets schemas/templates");
 }
 
-async function appendAudit(storeDir: string, message: string): Promise<void> {
+/**
+ * Append a structured audit event.
+ *
+ * Writes to two places (both via fs.appendFile, which is atomic on POSIX so
+ * concurrent acs invocations cannot truncate each other):
+ *   1. audit/{YYYY-MM-DD}.log    — daily JSONL rollup (replaces legacy text log)
+ *   2. audit/tasks/{task_id}.jsonl — per-task working log (only if task_id set)
+ *
+ * session_id is auto-filled from ACS_SESSION_ID when present. ts is auto-filled
+ * with the current ISO timestamp when callers omit it.
+ */
+async function appendAudit(storeDir: string, event: AuditLogEvent): Promise<void> {
   const auditDir = path.join(storeDir, "audit");
   await mkdir(auditDir, { recursive: true });
-  const filePath = path.join(auditDir, `${today()}.log`);
-  const line = `${new Date().toISOString()} ${message}\n`;
-  const existing = existsSync(filePath) ? await readFile(filePath, "utf8") : "";
-  await writeFile(filePath, existing + line, "utf8");
+  const sessionId = process.env["ACS_SESSION_ID"];
+  const base: AuditLogEvent = { ...event };
+  if (!base.ts) base.ts = new Date().toISOString();
+  if (sessionId && !base.session_id) {
+    base.session_id = sessionId;
+  }
+  const line = JSON.stringify(base) + "\n";
+  await appendFile(path.join(auditDir, `${today()}.log`), line, "utf8");
+  if (typeof base.task_id === "string" && base.task_id.length > 0) {
+    const tasksDir = path.join(auditDir, "tasks");
+    await mkdir(tasksDir, { recursive: true });
+    await appendFile(path.join(tasksDir, `${base.task_id}.jsonl`), line, "utf8");
+  }
+}
+
+export async function readTaskLog(options: ReadTaskLogOptions): Promise<AuditLogEvent[]> {
+  const { storeDir } = resolveStoreContext(options.rootDir);
+  const filePath = path.join(storeDir, "audit", "tasks", `${options.taskId}.jsonl`);
+  if (!existsSync(filePath)) {
+    return [];
+  }
+  const content = await readFile(filePath, "utf8");
+  const events: AuditLogEvent[] = [];
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as AuditLogEvent;
+      events.push(parsed);
+    } catch {
+      // skip malformed line; legacy text logs may not be JSON
+    }
+  }
+  if (typeof options.tail === "number" && options.tail > 0 && events.length > options.tail) {
+    return events.slice(events.length - options.tail);
+  }
+  return events;
+}
+
+export async function getTasksOverview(rootDirInput: string): Promise<TaskOverview[]> {
+  const { projectDir, storeDir } = resolveStoreContext(rootDirInput);
+  const policy = await loadPolicy(rootDirInput);
+  // Group artifacts by their frontmatter task_id field, which is written by
+  // createArtifact via the TASK_ID template variable. Falls back to the
+  // legacy id-suffix heuristic only when frontmatter has no task_id.
+  const taskIds = new Set<string>();
+  const artifactPaths = await listFiles(path.join(storeDir, "artifacts"), ".md");
+  for (const absolutePath of artifactPaths) {
+    const content = await readFile(absolutePath, "utf8");
+    const metadata = parseFrontmatter(content);
+    const taskIdValue = metadata["task_id"];
+    if (typeof taskIdValue === "string" && taskIdValue.length > 0) {
+      taskIds.add(taskIdValue);
+      continue;
+    }
+    const idValue = metadata["id"];
+    if (typeof idValue === "string") {
+      const dash = idValue.indexOf("-");
+      if (dash > 0 && dash < idValue.length - 1) {
+        taskIds.add(idValue.slice(dash + 1));
+      }
+    }
+  }
+  const stages = policy.workflow.stages;
+  const result: TaskOverview[] = [];
+  for (const taskId of taskIds) {
+    const artifacts = await findArtifactsForTask(storeDir, projectDir, taskId);
+    const owners = new Set<string>();
+    for (const artifact of artifacts) {
+      const def = findArtifactDefinition(policy, canonicalArtifactType(policy, artifact.type));
+      if (def && def.owner !== "system") {
+        owners.add(def.owner);
+      }
+    }
+    let suggestedNextRole = stages[0]?.owner ?? "ba";
+    let isEntry = false;
+    if (owners.size === 0) {
+      suggestedNextRole = "any";
+      isEntry = true;
+    } else {
+      // Find the latest stage whose owner has artifacts and pick its next stage.
+      let lastIdx = -1;
+      stages.forEach((stage, idx) => {
+        if (owners.has(stage.owner)) lastIdx = idx;
+      });
+      if (lastIdx >= 0 && lastIdx + 1 < stages.length) {
+        suggestedNextRole = stages[lastIdx + 1]!.owner;
+      } else if (lastIdx >= 0) {
+        suggestedNextRole = stages[lastIdx]!.owner;
+      }
+    }
+    result.push({
+      taskId,
+      rolesWithArtifacts: [...owners],
+      artifactCount: artifacts.length,
+      suggestedNextRole,
+      isEntry
+    });
+  }
+  return result.sort((a, b) => a.taskId.localeCompare(b.taskId));
 }
 
 function emptyResult(): AcsResult {

@@ -30,6 +30,7 @@ Fix any errors before creating artifacts or handoffs.
 If the task role is not yet clear, run:
 
 ```bash
+acs status                                           # lists tasks + roles-with-artifacts + suggested-next
 acs next --role <ba|sa|dev|qa> --task TASK-123
 acs role explain <role> --task TASK-123
 ```
@@ -42,6 +43,37 @@ Then switch to the matching role skill:
 | Solution Architect | `acs-sa` |
 | Developer | `acs-dev` |
 | QA | `acs-qa` |
+
+## Entry-Role Mode (`--mode relaxed`)
+
+ACS allows **any role** to be the workflow entry. When you start a task at SA,
+DEV, or QA without prior upstream artifacts, use `--mode relaxed` so missing
+inputs are downgraded from errors to warnings + AI hints, and create a
+synthetic entry handoff so the audit trail is complete:
+
+```bash
+acs handoff create --from system --to <role> --task TASK-123 --mode relaxed
+acs validate --role <role> --task TASK-123 --mode relaxed
+acs next --role <role> --task TASK-123 --mode relaxed
+```
+
+Default is `--mode strict`, which preserves the canonical BA → SA → DEV → QA
+gate. Use strict whenever the upstream artifacts already exist.
+
+## Working Log
+
+Every artifact create / handoff / package / index event is appended as JSONL
+to `audit/{YYYY-MM-DD}.log` (daily rollup) and `audit/tasks/{TASK_ID}.jsonl`
+(per-task working log). Reads are atomic and concurrency-safe.
+
+```bash
+acs log --task TASK-123                # human-readable, all events
+acs log --task TASK-123 --tail 20      # last N events
+acs log --task TASK-123 --json         # full structured events
+```
+
+Set `ACS_SESSION_ID` in the environment to tag every event from one agent
+run; otherwise the CLI auto-generates one per invocation.
 
 ## Store Maintenance
 

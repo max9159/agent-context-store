@@ -5,6 +5,20 @@ description: ACS Business Analyst role — capture requirements as SRS, user sto
 
 # ACS — Business Analyst (BA) Role
 
+## 0. Detect Entry Mode
+
+BA is the canonical entry role, so usually no setup is needed. If `acs status`
+shows the task already has artifacts owned by other roles (e.g. SA started
+first), you are augmenting an in-progress task — coordinate with the user
+before adding BA artifacts.
+
+For a brand-new task, optionally record a synthetic entry handoff so the
+audit log reflects the start:
+
+```bash
+acs handoff create --from system --to ba --task TASK-123 --mode relaxed
+```
+
 ## 1. Check the Store
 
 ```bash

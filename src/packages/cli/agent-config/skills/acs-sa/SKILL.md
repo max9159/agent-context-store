@@ -5,6 +5,26 @@ description: ACS Solution Architect role — produce SDD, ADR, and API design ar
 
 # ACS — Solution Architect (SA) Role
 
+## 0. Detect Entry Mode
+
+Run these first to decide whether SA is the entry role for this task:
+
+```bash
+acs status                                  # shows roles-with-artifacts per task
+acs next --role sa --task TASK-123          # lists what BA inputs (if any) exist
+```
+
+If `acs status` shows no artifacts for the task, or `acs next` reports BA
+inputs as missing **and** the user did not run BA, you are the entry role.
+Switch to relaxed mode for the rest of this skill and record a synthetic
+entry handoff:
+
+```bash
+acs handoff create --from system --to sa --task TASK-123 --mode relaxed
+```
+
+Otherwise (BA artifacts exist), continue in strict mode (the default).
+
 ## 1. Check the Store
 
 ```bash
@@ -35,6 +55,8 @@ acs sa new api-design --task TASK-123 --title "API design"
 
 ```bash
 acs validate --role sa --task TASK-123
+# If you are the entry role (Step 0), use:
+# acs validate --role sa --task TASK-123 --mode relaxed
 ```
 
 Do not proceed until validation passes.

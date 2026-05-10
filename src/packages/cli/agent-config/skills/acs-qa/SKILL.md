@@ -5,6 +5,24 @@ description: ACS QA role — create test plans and produce the final validation 
 
 # ACS — QA Role
 
+## 0. Detect Entry Mode
+
+```bash
+acs status
+acs next --role qa --task TASK-123
+```
+
+If no DEV/SA artifacts exist and the user asked you to start at QA (e.g.
+exploratory test charter, regression sweep on existing code), you are the
+entry role. Switch to relaxed mode and record the synthetic entry handoff:
+
+```bash
+acs handoff create --from system --to qa --task TASK-123 --mode relaxed
+acs validate --role qa --task TASK-123 --mode relaxed
+```
+
+Otherwise, continue with the DEV handoff path below.
+
 ## 1. Check the Store
 
 ```bash
