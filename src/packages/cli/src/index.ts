@@ -16,10 +16,14 @@ import {
   explainRole,
   getNextActions,
   getStoreInfo,
+  getTasksOverview,
   initContextStore,
   listHandoffs,
   listRoles,
+  readTaskLog,
   validatePolicyScope,
+  type AcsHint,
+  type AcsMode,
   type StoreMode
 } from "agent-context-store-core";
 
@@ -29,6 +33,22 @@ interface ParsedArgs {
 }
 
 const validModes: StoreMode[] = ["in-repo", "local", "dedicated"];
+const validAcsModes: AcsMode[] = ["strict", "relaxed"];
+
+function ensureSessionId(): void {
+  if (!process.env["ACS_SESSION_ID"]) {
+    process.env["ACS_SESSION_ID"] = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+}
+
+function getAcsMode(args: ParsedArgs, fallback: AcsMode = "strict"): AcsMode {
+  const raw = getStringFlag(args, "mode");
+  if (!raw) return fallback;
+  const normalized = raw.toLowerCase();
+  if ((validAcsModes as string[]).includes(normalized)) return normalized as AcsMode;
+  // "strict"/"relaxed" only — store-mode --mode is parsed in `init` separately.
+  throw new Error(`Unknown --mode "${raw}". Expected one of: ${validAcsModes.join(", ")}`);
+}
 
 const require = createRequire(import.meta.url);
 const cliPackage = require("../package.json") as { version?: string };
@@ -64,6 +84,7 @@ function getUserSkillsDir(agent: Exclude<AgentName, "openclaw" | "all">): string
 }
 
 async function main(argv: string[]): Promise<void> {
+  ensureSessionId();
   const [command, ...rest] = argv;
 
   if (!command || command === "--help" || command === "-h") {
@@ -124,6 +145,19 @@ async function main(argv: string[]): Promise<void> {
       console.log(`artifacts   ${validation.artifacts.length}`);
       console.log(`handoffs    ${validation.handoffs.length}`);
       console.log(`valid       ${validation.valid ? "yes" : "no"}`);
+      const overview = await getTasksOverview(process.cwd());
+      if (overview.length > 0) {
+        console.log("");
+        console.log("Tasks:");
+        for (const task of overview) {
+          const roles = task.rolesWithArtifacts.length > 0 ? task.rolesWithArtifacts.join(",") : "-";
+          const next = task.isEntry ? "any (relaxed)" : task.suggestedNextRole;
+          console.log(`  ${task.taskId}  artifacts=${task.artifactCount}  roles-with-artifacts=[${roles}]  suggested-next=${next}`);
+        }
+      } else {
+        console.log("");
+        console.log("Tasks: (none yet — any role may be the entry; use --mode relaxed)");
+      }
     }
     return;
   }
@@ -138,8 +172,9 @@ async function main(argv: string[]): Promise<void> {
     const role = getStringFlag(args, "role");
     const taskId = getStringFlag(args, "task");
     const artifact = getStringFlag(args, "artifact");
+    const mode = getAcsMode(args);
     const validation = role || taskId || artifact
-      ? await validatePolicyScope({ rootDir: process.cwd(), role, taskId, artifactPath: artifact })
+      ? await validatePolicyScope({ rootDir: process.cwd(), role, taskId, artifactPath: artifact, mode })
       : await doctor(process.cwd());
     if (role) {
       console.log(`role ${role}`);
@@ -150,9 +185,40 @@ async function main(argv: string[]): Promise<void> {
     if (artifact) {
       console.log(`artifact ${artifact}`);
     }
+    if (role || taskId || artifact) {
+      console.log(`mode ${mode}`);
+    }
     printValidation(validation);
     if (!validation.valid) {
       process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (command === "log") {
+    const args = parseArgs(rest);
+    const taskId = requireFlag(args, "task");
+    const tail = getStringFlag(args, "tail");
+    const tailNum = tail ? Number.parseInt(tail, 10) : undefined;
+    const asJson = !!args.flags["json"];
+    const events = await readTaskLog({ rootDir: process.cwd(), taskId, tail: Number.isFinite(tailNum) ? tailNum : undefined });
+    if (asJson) {
+      console.log(JSON.stringify(events, null, 2));
+      return;
+    }
+    if (events.length === 0) {
+      console.log(`(no events for ${taskId})`);
+      return;
+    }
+    for (const ev of events) {
+      const parts = [ev.ts, ev.action];
+      if (ev.role) parts.push(`role=${ev.role}`);
+      if (ev.from && ev.to) parts.push(`${ev.from}->${ev.to}`);
+      if (ev.artifact) parts.push(`artifact=${ev.artifact}`);
+      if (ev.handoff) parts.push(`handoff=${ev.handoff}`);
+      if (ev.mode) parts.push(`mode=${ev.mode}`);
+      if (ev.session_id) parts.push(`session=${ev.session_id}`);
+      console.log(parts.join("  "));
     }
     return;
   }
@@ -189,7 +255,8 @@ async function main(argv: string[]): Promise<void> {
     const args = parseArgs(rest);
     const role = requireFlag(args, "role");
     const taskId = requireFlag(args, "task");
-    printNextActions(await getNextActions({ rootDir: process.cwd(), role, taskId }));
+    const mode = getAcsMode(args);
+    printNextActions(await getNextActions({ rootDir: process.cwd(), role, taskId, mode }));
     return;
   }
 
@@ -392,7 +459,8 @@ async function handleRoleCommand(role: string, rest: string[]): Promise<void> {
   if (action === "next") {
     const args = parseArgs([...tail, "--role", role]);
     const taskId = requireFlag(args, "task");
-    printNextActions(await getNextActions({ rootDir: process.cwd(), role, taskId }));
+    const mode = getAcsMode(args);
+    printNextActions(await getNextActions({ rootDir: process.cwd(), role, taskId, mode }));
     return;
   }
   throw new Error(`Unknown role command "${role} ${action ?? ""}". Expected new, package, or next.`);
@@ -446,8 +514,9 @@ async function handleHandoff(rest: string[]): Promise<void> {
     const fromRole = requireFlag(args, "from");
     const toRole = requireFlag(args, "to");
     const taskId = requireFlag(args, "task");
-    const result = await createHandoff({ rootDir: process.cwd(), fromRole, toRole, taskId });
-    printResult(`Created handoff ${result.handoffId}`, result);
+    const mode = getAcsMode(args);
+    const result = await createHandoff({ rootDir: process.cwd(), fromRole, toRole, taskId, mode });
+    printResult(`Created handoff ${result.handoffId} (${fromRole}->${toRole}, mode=${mode})`, result);
     return;
   }
 
@@ -456,8 +525,9 @@ async function handleHandoff(rest: string[]): Promise<void> {
     const fromRole = getStringFlag(args, "from");
     const toRole = getStringFlag(args, "to");
     const taskId = getStringFlag(args, "task");
+    const mode = getAcsMode(args);
     if (fromRole && toRole && taskId) {
-      const validation = await checkHandoff({ rootDir: process.cwd(), fromRole, toRole, taskId });
+      const validation = await checkHandoff({ rootDir: process.cwd(), fromRole, toRole, taskId, mode });
       printValidation(validation);
       if (!validation.valid) {
         process.exitCode = 1;
@@ -543,7 +613,7 @@ function printResult(title: string, result: { created: string[]; updated: string
   }
 }
 
-function printValidation(validation: { valid: boolean; errors: string[]; warnings: string[]; artifacts: unknown[]; handoffs: string[] }): void {
+function printValidation(validation: { valid: boolean; errors: string[]; warnings: string[]; artifacts: unknown[]; handoffs: string[]; hints?: AcsHint[]; mode?: AcsMode }): void {
   console.log(validation.valid ? "OK validation passed" : "ERROR validation failed");
   console.log(`artifacts ${validation.artifacts.length}`);
   console.log(`handoffs ${validation.handoffs.length}`);
@@ -553,6 +623,16 @@ function printValidation(validation: { valid: boolean; errors: string[]; warning
   }
   for (const error of validation.errors) {
     console.error(`error ${error}`);
+  }
+  printHints(validation.hints);
+}
+
+function printHints(hints?: AcsHint[]): void {
+  if (!hints || hints.length === 0) return;
+  console.log("");
+  console.log("Hints (for AI agents):");
+  for (const hint of hints) {
+    console.log(`- [${hint.for}] ${hint.message}`);
   }
 }
 
@@ -604,9 +684,14 @@ function printNextActions(next: {
   requiredInputs: Array<{ type: string; found: boolean }>;
   suggestedOutputs: string[];
   suggestedCommands: string[];
+  mode?: AcsMode;
+  hints?: AcsHint[];
 }): void {
   console.log(`Task: ${next.taskId}`);
   console.log(`Role: ${next.role}`);
+  if (next.mode) {
+    console.log(`Mode: ${next.mode}`);
+  }
   if (next.currentStage) {
     console.log(`Current stage: ${next.currentStage}`);
   }
@@ -624,6 +709,7 @@ function printNextActions(next: {
   for (const command of next.suggestedCommands) {
     console.log(`- ${command}`);
   }
+  printHints(next.hints);
 }
 
 function printHelp(): void {
@@ -638,16 +724,23 @@ Usage:
   acs role explain <ROLE> [--task <TASK_ID>]
   acs new <ARTIFACT_TYPE> [--role <ROLE>] --task <TASK_ID> [--title <TITLE>]
   acs <ROLE> new <ARTIFACT_TYPE> --task <TASK_ID> [--title <TITLE>]
-  acs next --role <ROLE> --task <TASK_ID>
-  acs validate [--role <ROLE>] [--task <TASK_ID>] [--artifact <PATH>]
-  acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>
+  acs next --role <ROLE> --task <TASK_ID> [--mode strict|relaxed]
+  acs validate [--role <ROLE>] [--task <TASK_ID>] [--artifact <PATH>] [--mode strict|relaxed]
+  acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID> [--mode strict|relaxed]
   acs handoff check <HANDOFF_ID_OR_PATH>
-  acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
+  acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID> [--mode strict|relaxed]
   acs handoff list [--task <TASK_ID>] [--role <ROLE>]
   acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
   acs <ROLE> package --task <TASK_ID> [--format markdown|json]
+  acs log --task <TASK_ID> [--tail N] [--json]
   acs index
   acs doctor
+
+Validation strictness (--mode):
+  strict   (default) Upstream artifacts are required; missing inputs are errors.
+  relaxed  Any role may be the entry point. Missing upstream artifacts become
+           warnings + AI hints. Use 'acs handoff create --from system --to <ROLE>
+           --task <TASK_ID> --mode relaxed' to record a synthetic entry handoff.
 
 Modes (--mode):
   in-repo     Store context in .acs/ inside this project (default)

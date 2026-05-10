@@ -5,6 +5,24 @@ description: ACS Developer role — create implementation notes and hand off to 
 
 # ACS — Developer (DEV) Role
 
+## 0. Detect Entry Mode
+
+```bash
+acs status
+acs next --role dev --task TASK-123
+```
+
+If no SA artifacts exist for the task and the user asked you to start at DEV
+(e.g. small fix, prototype), you are the entry role. Switch to relaxed mode
+and record the synthetic entry handoff:
+
+```bash
+acs handoff create --from system --to dev --task TASK-123 --mode relaxed
+acs validate --role dev --task TASK-123 --mode relaxed
+```
+
+Otherwise, continue with the SA handoff path below.
+
 ## 1. Check the Store
 
 ```bash

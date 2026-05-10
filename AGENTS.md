@@ -54,6 +54,19 @@ To run a single spec file:
 pnpm build && node --experimental-strip-types --test src/test/cli.spec.ts
 ```
 
+### Workflow entry mode
+
+The default workflow is BA → SA → DEV → QA, but **any role can be the entry
+point**. Pass `--mode relaxed` to `acs validate`, `acs next`, `acs handoff
+create`, and `acs handoff check` when starting at SA/DEV/QA without prior
+upstream artifacts. Missing upstream inputs become warnings + AI hints rather
+than errors. Default is `--mode strict`. The synthetic entry handoff is
+recorded with `acs handoff create --from system --to <role> --task <id>
+--mode relaxed`.
+
+Per-task working logs live at `audit/tasks/{TASK_ID}.jsonl` (JSONL, atomic
+appends). Read them with `acs log --task <id>`.
+
 ### Cursor skill routing
 
 The `.cursor/rules/workflow-routing.mdc` rule routes to explicit skills in `.cursor/skills/`:
