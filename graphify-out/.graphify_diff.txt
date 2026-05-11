@@ -1,0 +1,3 @@
+110 new nodes, 342 new edges, 49 nodes removed, 115 edges removed
+New nodes: parseArtifactTypeDefinition(), index.ts, renderPolicyPath(), Load Policy, buildAliases()
+New edges: 342
