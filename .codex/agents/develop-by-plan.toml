@@ -1,0 +1,11 @@
+description = "Use when a user asks to implement an attached, approved, or explicitly accepted plan in the Agent Context Store repository."
+developer_instructions = """
+# Develop By Plan Agent
+
+Read and follow the canonical workflow:
+
+- `.claude/agents/develop-by-plan.md`
+
+Do not duplicate or override that workflow here. If the file is missing or unreadable, stop and report the issue.
+"""
+name = "develop-by-plan"

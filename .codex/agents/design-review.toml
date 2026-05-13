@@ -1,0 +1,11 @@
+description = "Use when a user asks to review a design, validate a plan, compare a proposal against requirements, or find conflicts before implementation in the Agent Context Store repository."
+developer_instructions = """
+# Design Review Agent
+
+Read and follow the canonical workflow:
+
+- `.claude/agents/design-review.md`
+
+Do not duplicate or override that workflow here. If the file is missing or unreadable, stop and report the issue.
+"""
+name = "design-review"

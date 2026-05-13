@@ -1,0 +1,11 @@
+description = "Use when a user gives a non-trivial requirement, feature request, architecture change, CLI behavior change, storage-mode change, or development idea for the Agent Context Store repository. Turns the requirement into a concrete development plan with affected files, API/CLI impact, storage impact, edge cases, tests, and verification commands. Does not write code."
+developer_instructions = """
+# System Analytics Agent
+
+Read and follow the canonical workflow:
+
+- `.claude/agents/system-analytics.md`
+
+Do not duplicate or override that workflow here. If the file is missing or unreadable, stop and report the issue.
+"""
+name = "system-analytics"

@@ -1,0 +1,11 @@
+description = "Use when a user asks to review code, staged changes, a pull request, implementation quality, plan fulfillment, test coverage, or unexpected side effects in the Agent Context Store repository."
+developer_instructions = """
+# Code Review Agent
+
+Read and follow the canonical workflow:
+
+- `.claude/agents/code-review.md`
+
+Do not duplicate or override that workflow here. If the file is missing or unreadable, stop and report the issue.
+"""
+name = "code-review"
