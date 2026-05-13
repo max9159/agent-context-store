@@ -205,7 +205,8 @@ The store root is `.acs/` in **in-repo** mode and `<store-root>/` in **dedicated
   index.json
   audit/
   artifacts/
-    <artifact-type>/
+    <task-id>/
+      <artifact-type>/
   handoffs/
   summaries/
   packages/
@@ -217,11 +218,13 @@ The store root is `.acs/` in **in-repo** mode and `<store-root>/` in **dedicated
   docs/
 ```
 
-- `artifacts/`: durable SDLC artifacts such as requirements, designs, ADRs, API notes, and test plans.
+- `artifacts/`: durable SDLC artifacts grouped by task, for example `artifacts/DEMO-0001/srs/SRS-DEMO-0001.md` and `artifacts/DEMO-0001/acceptance-criteria/AC-DEMO-0001.md`.
 - `handoffs/`: explicit role-to-role handoff records.
 - `packages/`: role-specific context bundles for the next agent.
 - `index.json`: generated artifact and handoff index.
 - `audit/`: local audit log for CLI-created changes.
+
+Artifact storage is task-first in this version. Older type-first artifact paths are not part of the supported layout.
 
 ## Commands
 
@@ -301,7 +304,7 @@ Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLA
 | **Mesh topology, no central orchestrator** | Microsoft: agents are connected directly; each decides when to hand off. [[#2]](#references) | No orchestrator process — each role agent independently decides when its artifacts are complete and issues a handoff. The store is the shared substrate. |
 | **Dynamic routing rules** | Microsoft `HandoffBuilder.add_handoff(...)` / `WithHandoffs(...)` declares which agents may route to which. [[#2]](#references) | `workflows/` and `roles/` in the store define the legal BA→SA→Dev→QA edges; `acs validate` rejects out-of-policy handoffs. |
 | **Capability discovery (Agent Cards)** | A2A: agents advertise abilities via JSON Agent Cards so peers know what they can do. [[#3]](#references) | `acs roles` and `acs role explain <ROLE>` expose each role's inputs, outputs, and allowed artifact types — the role profile is the Agent Card. |
-| **Tasks & artifacts as the unit of exchange** | A2A: communication centers on tasks with lifecycles; artifacts are the task outputs. [[#4]](#references) | Every `acs` operation is keyed by `--task <TASK_ID>`; `artifacts/` holds the schema-validated outputs of each role's task phase. |
+| **Tasks & artifacts as the unit of exchange** | A2A: communication centers on tasks with lifecycles; artifacts are the task outputs. [[#4]](#references) | Every `acs` operation is keyed by `--task <TASK_ID>`; `artifacts/<TASK_ID>/` holds the schema-validated outputs of each role's task phase. |
 | **Durable, resumable workflows** | Microsoft `checkpoint_storage` / `FileCheckpointStorage` lets workflows pause and resume hours or days later. [[#2]](#references) | The Git-tracked store *is* the checkpoint. Any agent on any machine can `git pull` and resume from the last validated handoff. |
 | **Runtime-agnostic interoperability** | A2A: opaque agents on different frameworks collaborate without sharing memory or internal state. [[#4]](#references) | Cursor, Claude Code, Codex, and CI agents collaborate purely through validated artifacts and handoff records — no shared runtime, no shared memory. |
 | **Auditable handoff history** | A2A emphasizes observability and auditability for enterprise use. [[#4]](#references) | `audit/`, `index.json`, `acs handoff list`, and Git history give a complete, reviewable trail of every handoff. |

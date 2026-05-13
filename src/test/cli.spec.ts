@@ -196,26 +196,26 @@ describe("acs new", () => {
   test("creates an srs artifact under .acs/", () => {
     const r = runCli(["new", "srs", "--task", "TASK-CLI-01", "--title", "My Requirements"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".acs/artifacts/srs/SRS-TASK-CLI-01.md")));
+    assert.ok(exists(join(dir, ".acs/artifacts/TASK-CLI-01/srs/SRS-TASK-CLI-01.md")));
   });
 
   test("role alias creates an implementation note", () => {
     const r = runCli(["dev", "new", "implementation-note", "--task", "TASK-CLI-IMPL"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, ".acs/artifacts/implementation-note/IMPL-TASK-CLI-IMPL.md")));
+    assert.ok(exists(join(dir, ".acs/artifacts/TASK-CLI-IMPL/implementation-note/IMPL-TASK-CLI-IMPL.md")));
   });
 
   test("canonicalizes api and test aliases", () => {
     const api = runCli(["new", "api", "--task", "TASK-CLI-API"], { cwd: dir });
     assert.equal(api.status, 0, `stderr: ${api.stderr}`);
-    assert.ok(exists(join(dir, ".acs/artifacts/api-design/API-TASK-CLI-API.md")));
+    assert.ok(exists(join(dir, ".acs/artifacts/TASK-CLI-API/api-design/API-TASK-CLI-API.md")));
 
     const apiDesign = runCli(["sa", "new", "api-design", "--task", "TASK-CLI-API"], { cwd: dir });
     assert.notEqual(apiDesign.status, 0);
 
     const testPlan = runCli(["new", "test", "--task", "TASK-CLI-TEST"], { cwd: dir });
     assert.equal(testPlan.status, 0, `stderr: ${testPlan.stderr}`);
-    assert.ok(exists(join(dir, ".acs/artifacts/test-plan/TEST-TASK-CLI-TEST.md")));
+    assert.ok(exists(join(dir, ".acs/artifacts/TASK-CLI-TEST/test-plan/TEST-TASK-CLI-TEST.md")));
   });
 
   test("unknown artifact type exits non-zero", () => {
@@ -282,7 +282,7 @@ describe("acs validate", () => {
     runCli(["init", dir]);
     runCli(["new", "srs", "--task", "TASK-V01", "--title", "Validate SRS"], { cwd: dir });
 
-    const valid = runCli(["validate", "--role", "ba", "--task", "TASK-V01", "--artifact", ".acs/artifacts/srs/SRS-TASK-V01.md"], { cwd: dir });
+    const valid = runCli(["validate", "--role", "ba", "--task", "TASK-V01", "--artifact", ".acs/artifacts/TASK-V01/srs/SRS-TASK-V01.md"], { cwd: dir });
     assert.equal(valid.status, 0, `stderr: ${valid.stderr}`);
 
     const invalid = runCli(["validate", "--role", "fake", "--task", "TASK-MISSING", "--artifact", ".acs/artifacts/missing.md"], { cwd: dir });

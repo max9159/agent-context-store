@@ -97,6 +97,7 @@ export interface ReadTaskLogOptions {
 export interface ArtifactRecord {
   id: string;
   type: string;
+  taskId: string;
   title: string;
   version: string;
   status: string;
@@ -372,7 +373,7 @@ const defaultPolicy: AcsPolicy = {
   artifactTypes: [],
   aliases: { api: "api-design", test: "test-plan", developer: "dev", reviewer: "qa" },
   naming: {
-    artifactPath: "artifacts/{type}/{artifact_id}.{ext}",
+    artifactPath: "artifacts/{task_id}/{type}/{artifact_id}.{ext}",
     handoffPath: "handoffs/{task_id}/{handoff_id}.yaml",
     packagePath: "packages/{task_id}/{role}.context.{ext}"
   },
@@ -766,6 +767,7 @@ export async function createArtifact(options: CreateArtifactOptions): Promise<Ac
   }
 
   const artifactId = `${definition.idPrefix}-${options.taskId}`;
+  assertSafePathSegment(options.taskId, "task id");
   const title = options.title ?? `${artifactId} ${definition.displayName}`;
   const storeRelPath = renderPolicyPath(definition.pathTemplate ?? policy.naming.artifactPath, {
     type: canonicalType,
@@ -787,7 +789,7 @@ export async function createArtifact(options: CreateArtifactOptions): Promise<Ac
     ARTIFACT_ID: artifactId,
     TYPE: canonicalType,
     TITLE: title,
-    OWNER: definition.owner,
+    OWNER: role ?? definition.owner,
     TASK_ID: options.taskId,
     DATE: today()
   });
@@ -836,8 +838,24 @@ export async function validateContextStore(rootDirInput: string): Promise<Valida
     collectSchemaErrors(artifactValidator, metadata, resultPath, errors);
     const artifactType = String(metadata["type"] ?? "unknown");
     const canonicalType = canonicalArtifactType(policy, artifactType);
-    if (!findArtifactDefinition(policy, canonicalType)) {
+    const definition = findArtifactDefinition(policy, canonicalType);
+    if (!definition) {
       errors.push(`${resultPath}: unknown artifact type "${artifactType}"`);
+    }
+    const taskId = typeof metadata["task_id"] === "string" ? metadata["task_id"] : "";
+    if (definition) {
+      const artifactId = String(metadata["id"] ?? path.basename(absolutePath, ".md"));
+      const artifactRole = typeof metadata["owner"] === "string" ? canonicalRole(policy, metadata["owner"]) : definition.owner;
+      const expectedStoreRelPath = renderPolicyPath(definition.pathTemplate ?? policy.naming.artifactPath, {
+        type: canonicalType,
+        task_id: taskId,
+        artifact_id: artifactId,
+        role: artifactRole,
+        ext: "md"
+      });
+      if (storeRelPath !== expectedStoreRelPath) {
+        errors.push(`${resultPath}: expected task-first artifact path ${expectedStoreRelPath}`);
+      }
     }
     if (metadata["approval_status"] === "approved" && metadata["status"] !== "approved") {
       warnings.push(`${resultPath}: approval_status is approved but status is ${String(metadata["status"] ?? "missing")}`);
@@ -845,6 +863,7 @@ export async function validateContextStore(rootDirInput: string): Promise<Valida
     artifacts.push({
       id: String(metadata["id"] ?? path.basename(absolutePath, ".md")),
       type: canonicalType,
+      taskId,
       title: String(metadata["title"] ?? ""),
       version: String(metadata["version"] ?? ""),
       status: String(metadata["status"] ?? ""),
@@ -889,7 +908,7 @@ export async function validatePolicyScope(options: ValidateScopeOptions): Promis
   }
 
   if (options.taskId) {
-    const taskArtifacts = result.artifacts.filter((artifact) => artifact.id.includes(options.taskId!) || artifact.path.includes(options.taskId!));
+    const taskArtifacts = result.artifacts.filter((artifact) => artifact.taskId === options.taskId);
     if (taskArtifacts.length === 0) {
       const noArtifactsMsg = `No artifacts found for task "${options.taskId}"`;
       if (mode === "relaxed") {
@@ -962,6 +981,7 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<AcsR
   const policy = await loadPolicy(options.rootDir);
   const fromRole = canonicalRole(policy, options.fromRole);
   const toRole = canonicalRole(policy, options.toRole);
+  assertSafePathSegment(options.taskId, "task id");
   const handoffId = `HOFF-${options.taskId}-${fromRole.toUpperCase()}-${toRole.toUpperCase()}`;
   const storeRelPath = renderPolicyPath(policy.naming.handoffPath, {
     task_id: options.taskId,
@@ -1055,6 +1075,7 @@ export async function listHandoffs(options: ListHandoffsOptions): Promise<string
 
 export async function buildContextPackage(options: BuildContextPackageOptions): Promise<AcsResult & { packagePath: string }> {
   const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
+  assertSafePathSegment(options.taskId, "task id");
   const policy = await loadPolicy(options.rootDir);
   const format = options.format ?? "markdown";
   const allArtifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
@@ -1302,6 +1323,20 @@ function assertSafeStoreRelPath(relPath: string, label: string): void {
   const normalized = path.normalize(relPath);
   if (path.isAbsolute(relPath) || normalized.startsWith("..") || normalized.includes(`..${path.sep}`)) {
     throw new Error(`Invalid ${label}: ${relPath}`);
+  }
+}
+
+function assertSafePathSegment(segment: string, label: string): void {
+  if (
+    segment.length === 0
+    || segment === "."
+    || segment === ".."
+    || path.isAbsolute(segment)
+    || segment.includes("/")
+    || segment.includes("\\")
+    || path.normalize(segment) !== segment
+  ) {
+    throw new Error(`Invalid ${label}: ${segment}`);
   }
 }
 
@@ -1890,14 +1925,18 @@ async function listFiles(rootDir: string, extension: string): Promise<string[]> 
 }
 
 async function findArtifactsForTask(storeDir: string, projectDir: string, taskId: string): Promise<ArtifactRecord[]> {
-  const artifactPaths = (await listFiles(path.join(storeDir, "artifacts"), ".md")).filter((file) => path.basename(file).includes(taskId));
+  const artifactPaths = await listFiles(path.join(storeDir, "artifacts"), ".md");
   const artifacts: ArtifactRecord[] = [];
   for (const artifactPath of artifactPaths) {
     const content = await readFile(artifactPath, "utf8");
     const metadata = parseFrontmatter(content);
+    if (metadata["task_id"] !== taskId) {
+      continue;
+    }
     artifacts.push({
       id: String(metadata["id"] ?? path.basename(artifactPath, ".md")),
       type: String(metadata["type"] ?? "unknown"),
+      taskId: String(metadata["task_id"] ?? ""),
       title: String(metadata["title"] ?? ""),
       version: String(metadata["version"] ?? ""),
       status: String(metadata["status"] ?? ""),
@@ -2095,8 +2134,7 @@ export async function getTasksOverview(rootDirInput: string): Promise<TaskOvervi
   const { projectDir, storeDir } = resolveStoreContext(rootDirInput);
   const policy = await loadPolicy(rootDirInput);
   // Group artifacts by their frontmatter task_id field, which is written by
-  // createArtifact via the TASK_ID template variable. Falls back to the
-  // legacy id-suffix heuristic only when frontmatter has no task_id.
+  // createArtifact via the TASK_ID template variable.
   const taskIds = new Set<string>();
   const artifactPaths = await listFiles(path.join(storeDir, "artifacts"), ".md");
   for (const absolutePath of artifactPaths) {
@@ -2105,14 +2143,6 @@ export async function getTasksOverview(rootDirInput: string): Promise<TaskOvervi
     const taskIdValue = metadata["task_id"];
     if (typeof taskIdValue === "string" && taskIdValue.length > 0) {
       taskIds.add(taskIdValue);
-      continue;
-    }
-    const idValue = metadata["id"];
-    if (typeof idValue === "string") {
-      const dash = idValue.indexOf("-");
-      if (dash > 0 && dash < idValue.length - 1) {
-        taskIds.add(idValue.slice(dash + 1));
-      }
     }
   }
   const stages = policy.workflow.stages;

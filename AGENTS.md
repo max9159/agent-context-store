@@ -43,6 +43,8 @@ This is a **pnpm workspace monorepo** with two published packages and a shared t
 
 **Asset fallback chain**: When creating artifacts or loading schemas, core first checks the store's `templates/` and `schemas/` directories, then falls back to `defaultTemplateText`/`defaultSchemaText` (embedded strings), then to `src/assets/` via `readAssetText` (source-tree only, used during development).
 
+**Artifact layout**: Artifacts use task-first storage: `artifacts/{task_id}/{type}/{artifact_id}.md` under the resolved store root (`.acs/` for in-repo mode). Artifact discovery must use frontmatter `task_id` as the source of truth, not infer task ownership from the directory tree.
+
 ### Test suite
 
 Tests use Node's built-in `node:test` runner — no test framework. All tests run against **compiled `dist/` output**, so `pnpm build` is always run first. Two isolation patterns are used:

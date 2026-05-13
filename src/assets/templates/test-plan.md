@@ -1,6 +1,7 @@
 ---
 id: {{ARTIFACT_ID}}
 type: test
+task_id: {{TASK_ID}}
 title: "{{TITLE}}"
 owner: qa_agent
 status: draft

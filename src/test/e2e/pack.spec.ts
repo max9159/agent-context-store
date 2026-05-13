@@ -53,6 +53,23 @@ function run(
   return { stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
+function parsePackFilename(stdout: string): string {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let start = 0; start < lines.length; start += 1) {
+    const candidate = lines.slice(start).join("\n");
+    try {
+      const parsed = JSON.parse(candidate) as { filename?: string } | Array<{ filename?: string }>;
+      const info = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (info?.filename) {
+        return info.filename;
+      }
+    } catch {
+      // pnpm may print lifecycle output before the JSON payload; keep scanning.
+    }
+  }
+  throw new Error(`Could not parse pnpm pack --json output:\n${stdout}`);
+}
+
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 describe("npm pack smoke — install from tarball and run the real CLI", () => {
@@ -67,20 +84,18 @@ describe("npm pack smoke — install from tarball and run the real CLI", () => {
     installDir = makeTempDir("acs-install-");
 
     // ── 1. Pack core ──────────────────────────────────────────────────────
-    // pnpm pack --json returns a single object { name, version, filename, files[] }
-    // where `filename` is already the full absolute path to the produced tarball.
+    // pnpm pack --json returns package metadata with the produced tarball path.
+    // Some pnpm versions print lifecycle output before the JSON payload.
     const coreOut = run("pnpm", ["pack", "--json", "--pack-destination", packDir], {
       cwd: coreDir,
     });
-    const coreInfo = JSON.parse(coreOut.stdout) as { filename: string };
-    const coreTarball = coreInfo.filename;
+    const coreTarball = parsePackFilename(coreOut.stdout);
 
     // ── 2. Pack CLI ───────────────────────────────────────────────────────
     const cliOut = run("pnpm", ["pack", "--json", "--pack-destination", packDir], {
       cwd: cliDir,
     });
-    const cliInfo = JSON.parse(cliOut.stdout) as { filename: string };
-    const cliTarball = cliInfo.filename;
+    const cliTarball = parsePackFilename(cliOut.stdout);
 
     // ── 3. Create minimal npm project in installDir ───────────────────────
     //     type: "module" matches the CLI package so ESM resolution works.
@@ -186,7 +201,7 @@ describe("npm pack smoke — install from tarball and run the real CLI", () => {
         cwd: projectDir, encoding: "utf8", timeout: 10_000,
       });
       assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-      assert.ok(exists(join(projectDir, ".acs/artifacts/srs/SRS-PACK-001.md")));
+      assert.ok(exists(join(projectDir, ".acs/artifacts/PACK-001/srs/SRS-PACK-001.md")));
     } finally {
       await cleanupTempDir(projectDir);
     }

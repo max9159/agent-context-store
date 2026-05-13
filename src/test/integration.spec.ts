@@ -82,14 +82,14 @@ describe("Scenario: full SDLC in-repo workflow", () => {
 
   test("all role-typed artifacts are created under .acs/", () => {
     const expected = [
-      ".acs/artifacts/srs/SRS-INT-0001.md",
-      ".acs/artifacts/user-story/US-INT-0001.md",
-      ".acs/artifacts/acceptance-criteria/AC-INT-0001.md",
-      ".acs/artifacts/sdd/SDD-INT-0001.md",
-      ".acs/artifacts/adr/ADR-INT-0001.md",
-      ".acs/artifacts/api-design/API-INT-0001.md",
-      ".acs/artifacts/implementation-note/IMPL-INT-0001.md",
-      ".acs/artifacts/test-plan/TEST-INT-0001.md",
+      ".acs/artifacts/INT-0001/srs/SRS-INT-0001.md",
+      ".acs/artifacts/INT-0001/user-story/US-INT-0001.md",
+      ".acs/artifacts/INT-0001/acceptance-criteria/AC-INT-0001.md",
+      ".acs/artifacts/INT-0001/sdd/SDD-INT-0001.md",
+      ".acs/artifacts/INT-0001/adr/ADR-INT-0001.md",
+      ".acs/artifacts/INT-0001/api-design/API-INT-0001.md",
+      ".acs/artifacts/INT-0001/implementation-note/IMPL-INT-0001.md",
+      ".acs/artifacts/INT-0001/test-plan/TEST-INT-0001.md",
     ];
     for (const rel of expected) {
       assert.ok(exists(join(dir, rel)), `Missing: ${rel}`);
@@ -212,9 +212,9 @@ describe("Scenario: role enforcement and alias canonicalization", () => {
   test("acs new api --task routes to api-design/ canonical path (no api/ dir)", () => {
     const r = runCli(["new", "api", "--task", TASK], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, `.acs/artifacts/api-design/API-${TASK}.md`)),
+    assert.ok(exists(join(dir, `.acs/artifacts/${TASK}/api-design/API-${TASK}.md`)),
       "api-design/ canonical path must be created");
-    assert.ok(!exists(join(dir, `.acs/artifacts/api`)),
+    assert.ok(!exists(join(dir, `.acs/artifacts/${TASK}/api`)),
       "no separate api/ directory should be created");
   });
 
@@ -222,9 +222,9 @@ describe("Scenario: role enforcement and alias canonicalization", () => {
     const TTASK = `${TASK}-T`;
     const r = runCli(["new", "test", "--task", TTASK], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, `.acs/artifacts/test-plan/TEST-${TTASK}.md`)),
+    assert.ok(exists(join(dir, `.acs/artifacts/${TTASK}/test-plan/TEST-${TTASK}.md`)),
       "test-plan/ canonical path must be created");
-    assert.ok(!exists(join(dir, `.acs/artifacts/test`)),
+    assert.ok(!exists(join(dir, `.acs/artifacts/${TTASK}/test`)),
       "no separate test/ directory should be created");
   });
 
@@ -233,8 +233,8 @@ describe("Scenario: role enforcement and alias canonicalization", () => {
     const T2 = `${TASK}-ALIAS2`;
     assert.equal(runCli(["ba",  "new", "srs",          "--task", T1], { cwd: dir }).status, 0);
     assert.equal(runCli(["new", "srs", "--role", "ba", "--task", T2], { cwd: dir }).status, 0);
-    assert.ok(exists(join(dir, `.acs/artifacts/srs/SRS-${T1}.md`)));
-    assert.ok(exists(join(dir, `.acs/artifacts/srs/SRS-${T2}.md`)));
+    assert.ok(exists(join(dir, `.acs/artifacts/${T1}/srs/SRS-${T1}.md`)));
+    assert.ok(exists(join(dir, `.acs/artifacts/${T2}/srs/SRS-${T2}.md`)));
   });
 
   test("acs dev package --task is equivalent to acs package --role dev --task", () => {
@@ -282,7 +282,7 @@ describe("Scenario: dedicated mode round-trip", () => {
   test("artifacts go to root-level artifacts/ (no .acs/ prefix)", () => {
     const r = runCli(["new", "srs", "--task", TASK], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(exists(join(dir, `artifacts/srs/SRS-${TASK}.md`)),
+    assert.ok(exists(join(dir, `artifacts/${TASK}/srs/SRS-${TASK}.md`)),
       "artifact must be under root-level artifacts/");
   });
 

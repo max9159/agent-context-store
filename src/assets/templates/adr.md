@@ -1,6 +1,7 @@
 ---
 id: {{ARTIFACT_ID}}
 type: adr
+task_id: {{TASK_ID}}
 title: "{{TITLE}}"
 owner: sa_agent
 status: draft

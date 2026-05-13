@@ -1,6 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { unlink, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import os from "node:os";
 import { makeTempDir, cleanupTempDir, exists, readText } from "./helpers.ts";
@@ -53,6 +53,8 @@ describe("initContextStore — in-repo (default)", () => {
     const config = await readText(join(dir, ".acs/config.yaml"));
     assert.ok(config.includes("agent-context-store"));
     assert.ok(config.includes("mode: in-repo"));
+    const acsConfig = await readText(join(dir, ".acs/acs.yaml"));
+    assert.ok(acsConfig.includes('artifact_path: "artifacts/{task_id}/{type}/{artifact_id}.{ext}"'));
     const index = JSON.parse(await readText(join(dir, ".acs/index.json")));
     assert.deepEqual(index.artifacts, []);
     assert.deepEqual(index.handoffs, []);
@@ -201,6 +203,7 @@ describe("createArtifact", () => {
       const result = await createArtifact({ rootDir: dir, type, taskId: `TASK-${type.toUpperCase()}`, title: `Test ${type}` });
       assert.ok(exists(join(dir, result.artifactPath)), `Artifact not found: ${result.artifactPath}`);
       assert.ok(result.artifactPath.startsWith(".acs/"), `Expected path under .acs/, got: ${result.artifactPath}`);
+      assert.ok(result.artifactPath.includes(`/TASK-${type.toUpperCase()}/`), `Expected task-first artifact path, got: ${result.artifactPath}`);
       assert.ok(result.artifactId.length > 0);
     });
   }
@@ -221,14 +224,14 @@ describe("createArtifact", () => {
 
   test("canonicalizes api and test aliases", async () => {
     const api = await createArtifact({ rootDir: dir, type: "api", taskId: "TASK-ALIAS-API", title: "Alias API" });
-    assert.ok(api.artifactPath.includes("artifacts/api-design/API-TASK-ALIAS-API.md"), api.artifactPath);
+    assert.ok(api.artifactPath.includes("artifacts/TASK-ALIAS-API/api-design/API-TASK-ALIAS-API.md"), api.artifactPath);
     await assert.rejects(
       () => createArtifact({ rootDir: dir, type: "api-design", taskId: "TASK-ALIAS-API", title: "Canonical API" }),
       /already exists/
     );
 
     const testPlan = await createArtifact({ rootDir: dir, type: "test", taskId: "TASK-ALIAS-TEST", title: "Alias Test" });
-    assert.ok(testPlan.artifactPath.includes("artifacts/test-plan/TEST-TASK-ALIAS-TEST.md"), testPlan.artifactPath);
+    assert.ok(testPlan.artifactPath.includes("artifacts/TASK-ALIAS-TEST/test-plan/TEST-TASK-ALIAS-TEST.md"), testPlan.artifactPath);
     await assert.rejects(
       () => createArtifact({ rootDir: dir, type: "test-plan", taskId: "TASK-ALIAS-TEST", title: "Canonical Test" }),
       /already exists/
@@ -322,6 +325,93 @@ describe("validateContextStore", () => {
     assert.ok(invalid.errors.some((error) => error.includes("Unknown role")));
     assert.ok(invalid.errors.some((error) => error.includes("No artifacts found for task")));
     assert.ok(invalid.errors.some((error) => error.includes("Artifact not found")));
+  });
+
+  test("scoped validation matches exact frontmatter task_id", async () => {
+    const exactDir = makeTempDir("acs-core-exact-task-");
+    try {
+      await initContextStore({ rootDir: exactDir });
+      await createArtifact({ rootDir: exactDir, type: "srs", taskId: "TASK-10", title: "Overlapping Task" });
+
+      const result = await validatePolicyScope({ rootDir: exactDir, role: "ba", taskId: "TASK-1" });
+      assert.equal(result.valid, false);
+      assert.ok(result.errors.some((error) => error.includes('No artifacts found for task "TASK-1"')), result.errors.join("\n"));
+    } finally {
+      await cleanupTempDir(exactDir);
+    }
+  });
+
+  test("validates artifacts created with custom path templates", async () => {
+    const customDir = makeTempDir("acs-core-custom-path-");
+    try {
+      await initContextStore({ rootDir: customDir });
+      const typePath = join(customDir, ".acs", "artifact-types", "srs.yaml");
+      const typeYaml = await readText(typePath);
+      await writeFile(typePath, typeYaml.replace(
+        "default_owner: ba",
+        'default_owner: ba\npath_template: "artifacts/{task_id}/requirements/{artifact_id}.{ext}"'
+      ), "utf8");
+
+      const artifact = await createArtifact({ rootDir: customDir, type: "srs", taskId: "TASK-CUSTOM", title: "Custom Path" });
+      assert.equal(artifact.artifactPath, ".acs/artifacts/TASK-CUSTOM/requirements/SRS-TASK-CUSTOM.md");
+
+      const result = await validateContextStore(customDir);
+      assert.equal(result.valid, true, `Unexpected errors: ${result.errors.join("\n")}`);
+    } finally {
+      await cleanupTempDir(customDir);
+    }
+  });
+
+  test("validates custom path templates that include the creating role", async () => {
+    const rolePathDir = makeTempDir("acs-core-role-path-");
+    try {
+      await initContextStore({ rootDir: rolePathDir });
+      const typePath = join(rolePathDir, ".acs", "artifact-types", "handoff-package.yaml");
+      const typeYaml = await readText(typePath);
+      await writeFile(typePath, typeYaml.replace(
+        "default_owner: system",
+        'default_owner: system\npath_template: "artifacts/{task_id}/{role}/{artifact_id}.{ext}"'
+      ), "utf8");
+
+      const artifact = await createArtifact({ rootDir: rolePathDir, type: "handoff-package", role: "ba", taskId: "TASK-ROLEPATH", title: "Role Path" });
+      assert.equal(artifact.artifactPath, ".acs/artifacts/TASK-ROLEPATH/ba/HO-TASK-ROLEPATH.md");
+
+      const result = await validateContextStore(rolePathDir);
+      assert.equal(result.valid, true, `Unexpected errors: ${result.errors.join("\n")}`);
+    } finally {
+      await cleanupTempDir(rolePathDir);
+    }
+  });
+
+  test("rejects task IDs that are unsafe path segments", async () => {
+    await assert.rejects(
+      () => createArtifact({ rootDir: dir, type: "srs", taskId: "A/../ESCAPE", title: "Unsafe Task" }),
+      /Invalid task id/
+    );
+  });
+
+  test("rejects legacy type-first artifact paths", async () => {
+    const legacyDir = join(dir, ".acs", "artifacts", "srs");
+    const legacyPath = join(legacyDir, "SRS-TASK-LEGACY.md");
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(legacyPath, [
+      "---",
+      "id: SRS-TASK-LEGACY",
+      "type: srs",
+      "title: Legacy SRS",
+      "task_id: TASK-LEGACY",
+      "owner: ba",
+      "status: draft",
+      "approval_status: pending",
+      "version: 0.1.0",
+      "---",
+      "",
+      "# Legacy SRS",
+      ""
+    ].join("\n"), "utf8");
+
+    const result = await validateContextStore(dir);
+    assert.ok(result.errors.some((error) => error.includes("expected task-first artifact path")), result.errors.join("\n"));
   });
 });
 

@@ -1,6 +1,7 @@
 ---
 id: {{ARTIFACT_ID}}
 type: srs
+task_id: {{TASK_ID}}
 title: "{{TITLE}}"
 owner: ba_agent
 status: draft
