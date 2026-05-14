@@ -320,4 +320,4 @@ In short: industry handoff frameworks model handoffs as in-process tool calls be
 
 ## Developing This Repository
 
-If you want to modify or test the toolkit itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
+If you want to modify or test the toolkit itself, see [DEVELOPMENT.md](/docs/DEVELOPMENT.md)
