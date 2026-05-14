@@ -44,6 +44,7 @@ jobs:
         run: |
           export OLD=$(node -p "require('./package.json').version")
           NEW=$(node -e "
+            const { execSync } = require('child_process');
             const old = process.env.OLD;
             const type = process.env.RELEASE_TYPE;
             const m = old.match(/^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?\$/);
@@ -57,9 +58,17 @@ jobs:
             else if (type === 'minor') next = [a, b + 1, 0].join('.');
             else if (type === 'patch') next = beta !== undefined ? [a, b, c].join('.') : [a, b, c + 1].join('.');
             else if (type === 'beta') {
-              // continue an existing beta train, or start a new one off the next patch
-              if (beta !== undefined) next = [a, b, c].join('.') + '-beta.' + (+beta + 1);
-              else                    next = [a, b, c + 1].join('.') + '-beta.0';
+              // Continue the beta train from package.json and any previously pushed tags.
+              const base = beta !== undefined ? [a, b, c].join('.') : [a, b, c + 1].join('.');
+              const tagRe = new RegExp('^v' + base.replaceAll('.', '\\\\.') + '-beta\\\\.(\\\\d+)\\$');
+              const tags = execSync('git tag --list v' + base + '-beta.*', { encoding: 'utf8' })
+                .split('\\n')
+                .map((tag) => tag.match(tagRe))
+                .filter(Boolean)
+                .map((match) => Number(match[1]));
+              const currentBeta = beta !== undefined ? +beta : -1;
+              const nextBeta = Math.max(currentBeta, -1, ...tags) + 1;
+              next = base + '-beta.' + nextBeta;
             } else throw new Error('Unknown release_type: ' + type);
             console.log(next);
           ")
