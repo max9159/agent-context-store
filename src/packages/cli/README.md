@@ -246,6 +246,11 @@ Artifact storage is task-first in this version. Older type-first artifact paths 
 | `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             |
 | `acs package`        | Builds a role-specific context package for the next agent or automation step.                           |
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      |
+
+`acs package` includes a context budget advisory in Markdown and JSON output.
+Use `--max-tokens <N>` to override the configured budget for one run. The CLI
+does not split or rewrite artifacts; role skills decide semantic phase documents
+when the advisory reports `warning`, `high`, or `split_recommended`.
 | `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              |
 
 ### Full syntax
@@ -265,8 +270,8 @@ acs handoff create --from <ROLE> --to <ROLE> --task <TASK_ID>
 acs handoff check <HANDOFF_ID_OR_PATH>
 acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
 acs handoff list [--task <TASK_ID>] [--role <ROLE>]
-acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
-acs <ROLE> package --task <TASK_ID> [--format markdown|json]
+acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
+acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
 acs index
 acs doctor
 ```

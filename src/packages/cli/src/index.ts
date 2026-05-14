@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -490,8 +490,48 @@ async function handlePackage(rest: string[]): Promise<void> {
   const taskId = requireFlag(args, "task");
   const role = requireFlag(args, "role");
   const format = getStringFlag(args, "format") === "json" ? "json" : "markdown";
-  const result = await buildContextPackage({ rootDir: process.cwd(), taskId, role, format });
+  const maxTokensRaw = getStringFlag(args, "max-tokens");
+  let maxTokens: number | undefined;
+  if (maxTokensRaw) {
+    const parsedMaxTokens = Number.parseInt(maxTokensRaw, 10);
+    if (!Number.isFinite(parsedMaxTokens) || parsedMaxTokens <= 0 || String(parsedMaxTokens) !== maxTokensRaw) {
+      throw new Error("--max-tokens must be a positive integer");
+    }
+    maxTokens = parsedMaxTokens;
+  }
+  const result = await buildContextPackage({ rootDir: process.cwd(), taskId, role, format, maxTokens });
   printResult(`Built context package ${result.packagePath}`, result);
+  if (result.warnings.length === 0) {
+    const packagePath = path.resolve(process.cwd(), result.packagePath);
+    if (existsSync(packagePath)) {
+      const advisory = readPackageContextBudget(packagePath);
+      if (advisory && advisory.risk !== "ok") {
+        console.log(`warning context budget ${advisory.risk}: estimated ${advisory.estimated_tokens} / ${advisory.max_tokens} tokens`);
+      }
+    }
+  }
+}
+
+function readPackageContextBudget(packagePath: string): { risk: string; estimated_tokens: number; max_tokens: number } | null {
+  try {
+    const content = readFileSync(packagePath, "utf8");
+    if (packagePath.endsWith(".json")) {
+      const parsed = JSON.parse(content) as { context_budget?: { risk?: unknown; estimated_tokens?: unknown; max_tokens?: unknown } };
+      const budget = parsed.context_budget;
+      if (typeof budget?.risk === "string" && typeof budget.estimated_tokens === "number" && typeof budget.max_tokens === "number") {
+        return { risk: budget.risk, estimated_tokens: budget.estimated_tokens, max_tokens: budget.max_tokens };
+      }
+    }
+    const risk = content.match(/- risk: ([^\n]+)/)?.[1]?.trim();
+    const estimated = Number.parseInt(content.match(/- estimated_tokens: ([0-9]+)/)?.[1] ?? "", 10);
+    const max = Number.parseInt(content.match(/- max_tokens: ([0-9]+)/)?.[1] ?? "", 10);
+    if (risk && Number.isFinite(estimated) && Number.isFinite(max)) {
+      return { risk, estimated_tokens: estimated, max_tokens: max };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 function findAgentConfigRoot(): string {
@@ -730,8 +770,8 @@ Usage:
   acs handoff check <HANDOFF_ID_OR_PATH>
   acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID> [--mode strict|relaxed]
   acs handoff list [--task <TASK_ID>] [--role <ROLE>]
-  acs package --task <TASK_ID> --role <ROLE> [--format markdown|json]
-  acs <ROLE> package --task <TASK_ID> [--format markdown|json]
+  acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
+  acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
   acs log --task <TASK_ID> [--tail N] [--json]
   acs index
   acs doctor

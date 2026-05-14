@@ -25,6 +25,16 @@ acs roles
 
 Fix any errors before creating artifacts or handoffs.
 
+## Context Budget Advisory
+
+`acs package` reports context budget risk for the next role. The CLI only
+estimates and advises; it never splits files or rewrites artifacts.
+
+When a package reports `warning`, `high`, or `split_recommended`, switch to the
+active role skill and follow its Context Budget Guard. The agent must decide
+semantic phase documents; do not depend on hidden chat memory or oversized
+single artifacts.
+
 ## Determine the Right Role
 
 If the task role is not yet clear, run:

@@ -43,6 +43,33 @@
           "reason": { "type": "string" }
         }
       }
+    },
+    "context_budget": {
+      "type": "object",
+      "required": ["estimator", "max_tokens", "estimated_tokens", "risk", "recommended_action", "oversized_artifacts"],
+      "properties": {
+        "estimator": { "enum": ["conservative"] },
+        "max_tokens": { "type": "number" },
+        "estimated_tokens": { "type": "number" },
+        "risk": { "enum": ["ok", "warning", "high", "split_recommended"] },
+        "recommended_action": { "enum": ["none", "split_phase_documents"] },
+        "oversized_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "type", "estimated_tokens", "risk", "suggestion"],
+            "properties": {
+              "path": { "type": "string" },
+              "type": { "type": "string" },
+              "estimated_tokens": { "type": "number" },
+              "risk": { "type": "string" },
+              "suggestion": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": true

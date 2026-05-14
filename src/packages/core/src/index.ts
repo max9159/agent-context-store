@@ -149,6 +149,7 @@ export interface BuildContextPackageOptions {
   taskId: string;
   role: string;
   format?: "markdown" | "json";
+  maxTokens?: number;
 }
 
 export interface ExplainRoleOptions {
@@ -204,6 +205,16 @@ interface RoleProfile {
   handoffTargets: string[];
   packageInclude: string[];
   packageExclude: string[];
+  contextBudget?: Partial<ContextBudgetPolicy>;
+}
+
+interface ContextBudgetPolicy {
+  estimator: "conservative";
+  defaultMaxTokens: number;
+  warningTokens: number;
+  highRiskTokens: number;
+  hardRecommendTokens: number;
+  mode: "advisory";
 }
 
 interface ArtifactTypeDefinition {
@@ -246,6 +257,7 @@ interface AcsPolicy {
     handoffPath: string;
     packagePath: string;
   };
+  contextBudget: ContextBudgetPolicy;
   workflow: {
     stages: WorkflowStage[];
     handoffRules: HandoffRule[];
@@ -376,6 +388,14 @@ const defaultPolicy: AcsPolicy = {
     artifactPath: "artifacts/{task_id}/{type}/{artifact_id}.{ext}",
     handoffPath: "handoffs/{task_id}/{handoff_id}.yaml",
     packagePath: "packages/{task_id}/{role}.context.{ext}"
+  },
+  contextBudget: {
+    estimator: "conservative",
+    defaultMaxTokens: 100000,
+    warningTokens: 80000,
+    highRiskTokens: 120000,
+    hardRecommendTokens: 150000,
+    mode: "advisory"
   },
   workflow: {
     stages: [
@@ -657,6 +677,10 @@ export async function loadPolicy(rootDirInput: string): Promise<AcsPolicy> {
       policy.naming.artifactPath = stringValue(naming["artifact_path"]) ?? policy.naming.artifactPath;
       policy.naming.handoffPath = stringValue(naming["handoff_path"]) ?? policy.naming.handoffPath;
       policy.naming.packagePath = stringValue(naming["package_path"]) ?? policy.naming.packagePath;
+    }
+    const contextBudget = parseContextBudget(config["context_budget"]);
+    if (contextBudget) {
+      policy.contextBudget = mergeContextBudget(policy.contextBudget, contextBudget);
     }
   }
 
@@ -1076,6 +1100,9 @@ export async function listHandoffs(options: ListHandoffsOptions): Promise<string
 export async function buildContextPackage(options: BuildContextPackageOptions): Promise<AcsResult & { packagePath: string }> {
   const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
   assertSafePathSegment(options.taskId, "task id");
+  if (options.maxTokens !== undefined && (!Number.isInteger(options.maxTokens) || options.maxTokens <= 0)) {
+    throw new Error("--max-tokens must be a positive integer");
+  }
   const policy = await loadPolicy(options.rootDir);
   const format = options.format ?? "markdown";
   const allArtifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
@@ -1101,8 +1128,18 @@ export async function buildContextPackage(options: BuildContextPackageOptions): 
 
   const handoffs = (await listFiles(path.join(storeDir, "handoffs"), ".yaml"))
     .filter((file) => path.basename(file).includes(options.taskId))
-    .filter((file) => handoffMatchesRole(file, role))
-    .map((file) => toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, file))));
+    .filter((file) => handoffMatchesRole(file, role));
+  const handoffPaths = handoffs.map((file) => toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, file))));
+
+  const contextBudget = await buildContextBudgetAdvisory({
+    storeDir,
+    projectDir,
+    policy,
+    roleProfile,
+    artifacts,
+    handoffs,
+    maxTokens: options.maxTokens
+  });
 
   const packageStoreRel = renderPolicyPath(policy.naming.packagePath, {
     task_id: options.taskId,
@@ -1118,8 +1155,9 @@ export async function buildContextPackage(options: BuildContextPackageOptions): 
     role: options.role,
     generated_at: new Date().toISOString(),
     included_artifacts: artifacts.map((artifact) => ({ path: artifact.path, type: artifact.type, version: artifact.version })),
-    included_handoffs: handoffs,
-    excluded_artifacts: excludedArtifacts
+    included_handoffs: handoffPaths,
+    excluded_artifacts: excludedArtifacts,
+    context_budget: contextBudget
   };
 
   if (format === "json") {
@@ -1144,7 +1182,15 @@ export async function buildContextPackage(options: BuildContextPackageOptions): 
       "",
       "## Included Handoffs",
       "",
-      ...handoffs.map((handoff) => `- ${handoff}`),
+      ...handoffPaths.map((handoff) => `- ${handoff}`),
+      "",
+      "## Context Budget",
+      "",
+      `- estimator: ${contextBudget.estimator}`,
+      `- max_tokens: ${contextBudget.max_tokens}`,
+      `- estimated_tokens: ${contextBudget.estimated_tokens}`,
+      `- risk: ${contextBudget.risk}`,
+      `- recommended_action: ${contextBudget.recommended_action}`,
       ""
     ].join("\n");
     await writeFile(targetPath, body, "utf8");
@@ -1158,6 +1204,83 @@ export async function buildContextPackage(options: BuildContextPackageOptions): 
   });
   const resultPath = toResultPath(storeDir, projectDir, packageStoreRel);
   return { ...emptyResult(), packagePath: resultPath, created: [resultPath] };
+}
+
+async function buildContextBudgetAdvisory(input: {
+  storeDir: string;
+  projectDir: string;
+  policy: AcsPolicy;
+  roleProfile: RoleProfile;
+  artifacts: ArtifactRecord[];
+  handoffs: string[];
+  maxTokens?: number;
+}): Promise<{
+  estimator: "conservative";
+  max_tokens: number;
+  estimated_tokens: number;
+  risk: "ok" | "warning" | "high" | "split_recommended";
+  recommended_action: "none" | "split_phase_documents";
+  oversized_artifacts: Array<{ path: string; type: string; estimated_tokens: number; risk: string; suggestion: string }>;
+}> {
+  const budget = resolveContextBudget(input.policy, input.roleProfile, input.maxTokens);
+  const artifactEstimates = await Promise.all(input.artifacts.map(async (artifact) => {
+    const absolutePath = resolveArtifactPath(input.storeDir, input.projectDir, artifact.path);
+    const content = absolutePath ? await readFile(absolutePath, "utf8") : "";
+    const estimatedTokens = estimateConservativeTokens(content);
+    return {
+      artifact,
+      estimatedTokens
+    };
+  }));
+  const handoffTokens = (await Promise.all(input.handoffs.map(async (handoff) => estimateConservativeTokens(await readFile(handoff, "utf8")))))
+    .reduce((sum, value) => sum + value, 0);
+  const totalArtifactTokens = artifactEstimates.reduce((sum, item) => sum + item.estimatedTokens, 0);
+  const estimatedTokens = totalArtifactTokens + handoffTokens;
+  const oversizedArtifacts = artifactEstimates
+    .filter((item) => item.estimatedTokens > budget.defaultMaxTokens)
+    .map((item) => ({
+      path: item.artifact.path,
+      type: item.artifact.type,
+      estimated_tokens: item.estimatedTokens,
+      risk: "split_recommended",
+      suggestion: `split by executable ${item.artifact.type} phase`
+    }));
+  const risk = oversizedArtifacts.length > 0
+    ? "split_recommended"
+    : contextBudgetRisk(estimatedTokens, budget);
+  return {
+    estimator: budget.estimator,
+    max_tokens: budget.defaultMaxTokens,
+    estimated_tokens: estimatedTokens,
+    risk,
+    recommended_action: risk === "ok" ? "none" : "split_phase_documents",
+    oversized_artifacts: oversizedArtifacts
+  };
+}
+
+function resolveContextBudget(policy: AcsPolicy, roleProfile: RoleProfile, maxTokens?: number): ContextBudgetPolicy {
+  const roleBudget = roleProfile.contextBudget ? mergeContextBudget(policy.contextBudget, roleProfile.contextBudget) : policy.contextBudget;
+  if (!maxTokens) {
+    return roleBudget;
+  }
+  return {
+    ...roleBudget,
+    defaultMaxTokens: maxTokens,
+    warningTokens: Math.floor(maxTokens * 0.8),
+    highRiskTokens: Math.floor(maxTokens * 1.2),
+    hardRecommendTokens: Math.floor(maxTokens * 1.5)
+  };
+}
+
+function estimateConservativeTokens(content: string): number {
+  return Math.max(1, Math.ceil(content.length / 3));
+}
+
+function contextBudgetRisk(estimatedTokens: number, budget: ContextBudgetPolicy): "ok" | "warning" | "high" | "split_recommended" {
+  if (estimatedTokens >= budget.hardRecommendTokens) return "split_recommended";
+  if (estimatedTokens >= budget.highRiskTokens) return "high";
+  if (estimatedTokens >= budget.warningTokens) return "warning";
+  return "ok";
 }
 
 export async function buildIndex(rootDirInput: string): Promise<AcsResult & { artifactCount: number; handoffCount: number }> {
@@ -1384,7 +1507,52 @@ function parseRoleProfile(value: Record<string, unknown>): RoleProfile | null {
     defaultTemplates: stringMap(value["default_templates"]),
     handoffTargets: stringArray(value["handoff_targets"]),
     packageInclude: stringArray(isRecord(value["package_policy"]) ? value["package_policy"]["include"] : undefined),
-    packageExclude: stringArray(isRecord(value["package_policy"]) ? value["package_policy"]["exclude"] : undefined)
+    packageExclude: stringArray(isRecord(value["package_policy"]) ? value["package_policy"]["exclude"] : undefined),
+    contextBudget: parseContextBudget(value["context_budget"])
+  };
+}
+
+function parseContextBudget(value: unknown): Partial<ContextBudgetPolicy> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const result: Partial<ContextBudgetPolicy> = {};
+  const estimator = stringValue(value["estimator"]);
+  if (estimator === "conservative") {
+    result.estimator = estimator;
+  }
+  const mode = stringValue(value["mode"]);
+  if (mode === "advisory") {
+    result.mode = mode;
+  }
+  const defaultMaxTokens = numberValue(value["default_max_tokens"] ?? value["max_tokens"]);
+  if (defaultMaxTokens) {
+    result.defaultMaxTokens = defaultMaxTokens;
+  }
+  const warningTokens = numberValue(value["warning_tokens"]);
+  if (warningTokens) {
+    result.warningTokens = warningTokens;
+  }
+  const highRiskTokens = numberValue(value["high_risk_tokens"]);
+  if (highRiskTokens) {
+    result.highRiskTokens = highRiskTokens;
+  }
+  const hardRecommendTokens = numberValue(value["hard_recommend_tokens"]);
+  if (hardRecommendTokens) {
+    result.hardRecommendTokens = hardRecommendTokens;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function mergeContextBudget(base: ContextBudgetPolicy, override: Partial<ContextBudgetPolicy>): ContextBudgetPolicy {
+  const defaultMaxTokens = override.defaultMaxTokens ?? base.defaultMaxTokens;
+  return {
+    estimator: override.estimator ?? base.estimator,
+    defaultMaxTokens,
+    warningTokens: override.warningTokens ?? (override.defaultMaxTokens ? Math.floor(defaultMaxTokens * 0.8) : base.warningTokens),
+    highRiskTokens: override.highRiskTokens ?? (override.defaultMaxTokens ? Math.floor(defaultMaxTokens * 1.2) : base.highRiskTokens),
+    hardRecommendTokens: override.hardRecommendTokens ?? (override.defaultMaxTokens ? Math.floor(defaultMaxTokens * 1.5) : base.hardRecommendTokens),
+    mode: override.mode ?? base.mode
   };
 }
 
@@ -1436,6 +1604,11 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function numberValue(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
@@ -1467,6 +1640,13 @@ function stringifyAcsConfig(policy: AcsPolicy, mode: StoreMode, projectDir: stri
     `  artifact_path: "${policy.naming.artifactPath}"`,
     `  handoff_path: "${policy.naming.handoffPath}"`,
     `  package_path: "${policy.naming.packagePath}"`,
+    "context_budget:",
+    `  estimator: ${policy.contextBudget.estimator}`,
+    `  default_max_tokens: ${policy.contextBudget.defaultMaxTokens}`,
+    `  warning_tokens: ${policy.contextBudget.warningTokens}`,
+    `  high_risk_tokens: ${policy.contextBudget.highRiskTokens}`,
+    `  hard_recommend_tokens: ${policy.contextBudget.hardRecommendTokens}`,
+    `  mode: ${policy.contextBudget.mode}`,
     ""
   ].filter((line): line is string => typeof line === "string").join("\n");
 }
@@ -1485,6 +1665,13 @@ function stringifyRole(role: RoleProfile): string {
     "package_policy:",
     ...yamlArrayLines("include", role.packageInclude, "  "),
     ...yamlArrayLines("exclude", role.packageExclude, "  "),
+    ...(role.contextBudget ? [
+      "context_budget:",
+      ...(role.contextBudget.defaultMaxTokens ? [`  max_tokens: ${role.contextBudget.defaultMaxTokens}`] : []),
+      ...(role.contextBudget.warningTokens ? [`  warning_tokens: ${role.contextBudget.warningTokens}`] : []),
+      ...(role.contextBudget.highRiskTokens ? [`  high_risk_tokens: ${role.contextBudget.highRiskTokens}`] : []),
+      ...(role.contextBudget.hardRecommendTokens ? [`  hard_recommend_tokens: ${role.contextBudget.hardRecommendTokens}`] : [])
+    ] : []),
     ""
   ].join("\n");
 }
@@ -1591,6 +1778,18 @@ function defaultSchemaText(fileName: string): string | null {
             package_path: { type: "string" }
           },
           additionalProperties: false
+        },
+        context_budget: {
+          type: "object",
+          properties: {
+            estimator: { enum: ["conservative"] },
+            default_max_tokens: { type: "number" },
+            warning_tokens: { type: "number" },
+            high_risk_tokens: { type: "number" },
+            hard_recommend_tokens: { type: "number" },
+            mode: { enum: ["advisory"] }
+          },
+          additionalProperties: false
         }
       },
       additionalProperties: true
@@ -1617,6 +1816,19 @@ function defaultSchemaText(fileName: string): string | null {
           properties: {
             include: { type: "array", items: { type: "string" } },
             exclude: { type: "array", items: { type: "string" } }
+          },
+          additionalProperties: false
+        },
+        context_budget: {
+          type: "object",
+          properties: {
+            estimator: { enum: ["conservative"] },
+            max_tokens: { type: "number" },
+            default_max_tokens: { type: "number" },
+            warning_tokens: { type: "number" },
+            high_risk_tokens: { type: "number" },
+            hard_recommend_tokens: { type: "number" },
+            mode: { enum: ["advisory"] }
           },
           additionalProperties: false
         }
@@ -1653,6 +1865,46 @@ function defaultSchemaText(fileName: string): string | null {
         }
       },
       additionalProperties: false
+    }, null, 2);
+  }
+  if (fileName === "context-package.schema.json") {
+    return JSON.stringify({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "https://agent-context-store.dev/schemas/context-package.schema.json",
+      title: "Agent Context Store Role Context Package",
+      type: "object",
+      required: ["task_id", "role", "generated_at", "included_artifacts", "included_handoffs"],
+      properties: {
+        task_id: { type: "string" },
+        role: { type: "string" },
+        generated_at: { type: "string", format: "date-time" },
+        included_artifacts: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["path", "type"],
+            properties: {
+              path: { type: "string" },
+              type: { type: "string" },
+              version: { type: "string" }
+            }
+          }
+        },
+        included_handoffs: { type: "array", items: { type: "string" } },
+        excluded_artifacts: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["path", "reason"],
+            properties: {
+              path: { type: "string" },
+              reason: { type: "string" }
+            }
+          }
+        },
+        context_budget: contextBudgetSchema()
+      },
+      additionalProperties: true
     }, null, 2);
   }
   if (fileName === "workflow.schema.json") {
@@ -1701,6 +1953,36 @@ function defaultSchemaText(fileName: string): string | null {
     }, null, 2);
   }
   return JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: true }, null, 2);
+}
+
+function contextBudgetSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    required: ["estimator", "max_tokens", "estimated_tokens", "risk", "recommended_action", "oversized_artifacts"],
+    properties: {
+      estimator: { enum: ["conservative"] },
+      max_tokens: { type: "number" },
+      estimated_tokens: { type: "number" },
+      risk: { enum: ["ok", "warning", "high", "split_recommended"] },
+      recommended_action: { enum: ["none", "split_phase_documents"] },
+      oversized_artifacts: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["path", "type", "estimated_tokens", "risk", "suggestion"],
+          properties: {
+            path: { type: "string" },
+            type: { type: "string" },
+            estimated_tokens: { type: "number" },
+            risk: { type: "string" },
+            suggestion: { type: "string" }
+          },
+          additionalProperties: false
+        }
+      }
+    },
+    additionalProperties: false
+  };
 }
 
 function defaultTemplateText(fileName: string): string | null {

@@ -37,7 +37,27 @@ acs handoff check --from sa --to dev --task TASK-123
 acs package --task TASK-123 --role dev
 ```
 
-## 2. Create DEV Artifacts
+## 2. Context Budget Guard
+
+ACS artifacts are durable handoff documents for the next role agent, not private
+notes for the current chat.
+
+Before creating unusually large artifacts, and again before handoff, check the
+next role package:
+
+```bash
+acs package --task TASK-123 --role qa --format json
+```
+
+If `context_budget.risk` is `warning`, `high`, or `split_recommended`, do not
+rely on one oversized document. Decide semantic implementation phases and create
+or rewrite ACS artifacts as complete phase documents. Each phase document must
+include phase goal, scope, required inputs, execution steps, expected outputs,
+acceptance criteria, dependencies on other phases, and `source_refs`.
+
+Never split by arbitrary length and never require hidden chat memory.
+
+## 3. Create DEV Artifacts
 
 ```bash
 acs dev new implementation-note --task TASK-123
@@ -46,7 +66,7 @@ acs dev new unit-test-note --task TASK-123
 
 **Fill every section immediately** — document implementation decisions, deviations from the design, unit test coverage, and any constraints discovered during development. List consulted files under `source_refs`. Complete the Validation Checklist at the end of each file.
 
-## 3. Validate
+## 4. Validate
 
 ```bash
 acs validate --role dev --task TASK-123
@@ -54,7 +74,7 @@ acs validate --role dev --task TASK-123
 
 Do not proceed until validation passes.
 
-## 4. Mark Ready for Review
+## 5. Mark Ready for Review
 
 Do not create the QA handoff until all required DEV artifacts are ready for review:
 
@@ -71,7 +91,7 @@ acs validate --role dev --task TASK-123
 
 If the work is not ready for review, capture the remaining tasks or blockers in the artifacts and repeat validation before handoff.
 
-## 5. Hand Off to QA
+## 6. Hand Off to QA
 
 ```bash
 acs handoff create --from dev --to qa --task TASK-123
@@ -79,7 +99,7 @@ acs package --task TASK-123 --role qa
 acs index
 ```
 
-## 6. Output Handoff Prompt
+## 7. Output Handoff Prompt
 
 Only after the artifacts are marked ready for review and handoff creation succeeds, end your response with this prompt for the QA agent:
 

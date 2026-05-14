@@ -28,7 +28,27 @@ acs doctor
 
 Fix any errors before continuing.
 
-## 2. Create BA Artifacts
+## 2. Context Budget Guard
+
+ACS artifacts are durable handoff documents for the next role agent, not private
+notes for the current chat.
+
+Before creating unusually large artifacts, and again before handoff, check the
+next role package:
+
+```bash
+acs package --task TASK-123 --role sa --format json
+```
+
+If `context_budget.risk` is `warning`, `high`, or `split_recommended`, do not
+rely on one oversized document. Decide semantic requirement phases and create or
+rewrite ACS artifacts as complete phase documents. Each phase document must
+include phase goal, scope, required inputs, execution steps, expected outputs,
+acceptance criteria, dependencies on other phases, and `source_refs`.
+
+Never split by arbitrary length and never require hidden chat memory.
+
+## 3. Create BA Artifacts
 
 ```bash
 acs ba new srs --task TASK-123 --title "Feature requirements"
@@ -38,7 +58,7 @@ acs ba new acceptance-criteria --task TASK-123 --title "Feature acceptance crite
 
 **Fill every section immediately** — replace all placeholders with real content from the conversation and source files. List consulted files under `source_refs`. Complete the Validation Checklist at the end of each file.
 
-## 3. Validate
+## 4. Validate
 
 ```bash
 acs validate --role ba --task TASK-123
@@ -46,7 +66,7 @@ acs validate --role ba --task TASK-123
 
 Do not proceed until validation passes.
 
-## 4. Request Approval
+## 5. Request Approval
 
 Ask the user or responsible stakeholder to review and approve the BA artifacts before handoff.
 
@@ -66,7 +86,7 @@ acs validate --role ba --task TASK-123
 
 If approval is not granted, capture the requested changes in the artifacts and repeat validation before asking again.
 
-## 5. Hand Off to SA
+## 6. Hand Off to SA
 
 ```bash
 acs handoff create --from ba --to sa --task TASK-123
@@ -74,7 +94,7 @@ acs package --task TASK-123 --role sa
 acs index
 ```
 
-## 6. Output Handoff Prompt
+## 7. Output Handoff Prompt
 
 Only after approval and handoff creation succeed, end your response with this prompt for the SA agent:
 

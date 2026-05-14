@@ -230,6 +230,39 @@ describe("acs new", () => {
   });
 });
 
+describe("acs package context budget", () => {
+  let dir: string;
+  before(() => {
+    dir = makeTempDir("acs-cli-package-budget-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "TASK-PKG-BUDGET", "--title", "Budget SRS"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("json package includes context budget advisory and non-ok risk exits 0", async () => {
+    const r = runCli(["package", "--role", "dev", "--task", "TASK-PKG-BUDGET", "--format", "json", "--max-tokens", "40"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("context budget"), `stdout: ${r.stdout}`);
+    const pkg = JSON.parse(await readFile(join(dir, ".acs/packages/TASK-PKG-BUDGET/dev.context.json"), "utf8"));
+    assert.equal(pkg.context_budget.max_tokens, 40);
+    assert.equal(pkg.context_budget.risk, "split_recommended");
+  });
+
+  test("markdown package includes a context budget section", async () => {
+    const r = runCli(["package", "--role", "dev", "--task", "TASK-PKG-BUDGET", "--max-tokens", "200000"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const content = await readFile(join(dir, ".acs/packages/TASK-PKG-BUDGET/dev.context.md"), "utf8");
+    assert.ok(content.includes("## Context Budget"));
+    assert.ok(content.includes("risk"));
+  });
+
+  test("invalid --max-tokens exits non-zero", () => {
+    const r = runCli(["package", "--role", "dev", "--task", "TASK-PKG-BUDGET", "--max-tokens", "not-a-number"], { cwd: dir });
+    assert.notEqual(r.status, 0);
+    assert.ok((r.stderr + r.stdout).includes("max-tokens"));
+  });
+});
+
 describe("acs roles, role explain, and next", () => {
   let dir: string;
   before(() => {

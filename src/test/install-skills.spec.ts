@@ -63,6 +63,14 @@ describe("install-skills --agent cursor", () => {
     assert.ok(content.includes("acs ba new user-story --task TASK-123"), "BA skill should create a user story");
     assert.ok(content.includes("acs ba new acceptance-criteria --task TASK-123"), "BA skill should create acceptance criteria");
   });
+
+  test("installed role skills include context budget guard guidance", async () => {
+    for (const skill of ["acs-ba", "acs-sa", "acs-dev", "acs-qa"]) {
+      const content = await readText(join(home, `.cursor/skills/${skill}/SKILL.md`));
+      assert.ok(content.includes("Context Budget Guard"), `${skill} should include budget guard guidance`);
+      assert.ok(content.includes("split_phase_documents") || content.includes("phase documents"), `${skill} should guide phase document splitting`);
+    }
+  });
 });
 
 describe("install-skills --agent claude", () => {
@@ -109,6 +117,12 @@ describe("install-skills --agent codex", () => {
       `Found wrong '.agents/skills/' path in ~/.codex/AGENTS.md`
     );
   });
+
+  test("~/.codex/AGENTS.md routes context budget risk to the active role skill", async () => {
+    const content = await readText(join(home, ".codex/AGENTS.md"));
+    assert.ok(content.includes("context budget risk"));
+    assert.ok(content.includes("active ACS role skill"));
+  });
 });
 
 describe("install-skills --agent openclaw", () => {
@@ -145,6 +159,12 @@ describe("install-skills --agent all", () => {
     assert.ok(exists(join(home, ".cursor/AGENTS.md")), "~/.cursor/AGENTS.md missing");
     assert.ok(exists(join(home, ".claude/CLAUDE.md")), "~/.claude/CLAUDE.md missing");
     assert.ok(exists(join(home, ".codex/AGENTS.md")), "~/.codex/AGENTS.md missing");
+  });
+
+  test("CLAUDE.md references active role skill for context budget risk", async () => {
+    const content = await readText(join(home, ".claude/CLAUDE.md"));
+    assert.ok(content.includes("context budget risk"));
+    assert.ok(content.includes("active ACS role skill"));
   });
 
   test("AGENTS.md written to ~/.cursor and ~/.codex (not duplicated within each)", async () => {

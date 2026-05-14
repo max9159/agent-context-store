@@ -37,7 +37,27 @@ acs handoff check --from dev --to qa --task TASK-123
 acs package --task TASK-123 --role qa
 ```
 
-## 2. Create QA Artifacts
+## 2. Context Budget Guard
+
+ACS artifacts are durable handoff documents for the next role agent, not private
+notes for the current chat.
+
+Before creating unusually large artifacts, and again before handoff, check the
+next role package:
+
+```bash
+acs package --task TASK-123 --role sa --format json
+```
+
+If `context_budget.risk` is `warning`, `high`, or `split_recommended`, do not
+rely on one oversized document. Decide semantic test phases and create or
+rewrite ACS artifacts as complete phase documents. Each phase document must
+include phase goal, scope, required inputs, execution steps, expected outputs,
+acceptance criteria, dependencies on other phases, and `source_refs`.
+
+Never split by arbitrary length and never require hidden chat memory.
+
+## 3. Create QA Artifacts
 
 ```bash
 acs qa new test-plan --task TASK-123 --title "Feature test plan"
@@ -46,7 +66,7 @@ acs qa new qa-signoff --task TASK-123 --title "Feature QA signoff"
 
 **Fill every section immediately** — document test scope, test cases, acceptance criteria, signoff decision, and any risks. List consulted files under `source_refs`. Complete the Validation Checklist at the end of each file.
 
-## 3. Validate
+## 4. Validate
 
 ```bash
 acs validate --role qa --task TASK-123
@@ -54,7 +74,7 @@ acs validate --role qa --task TASK-123
 
 Do not proceed until validation passes.
 
-## 4. Request Approval
+## 5. Request Approval
 
 Ask the user or responsible stakeholder to review and approve the QA artifacts before handoff.
 
@@ -73,7 +93,7 @@ acs validate --role qa --task TASK-123
 
 If approval is not granted, capture the requested changes in the artifacts and repeat validation before asking again.
 
-## 5. Hand Off to SA
+## 6. Hand Off to SA
 
 ```bash
 acs handoff create --from qa --to sa --task TASK-123
@@ -81,7 +101,7 @@ acs package --task TASK-123 --role sa
 acs index
 ```
 
-## 6. Output Handoff Prompt
+## 7. Output Handoff Prompt
 
 Only after approval and handoff creation succeed, end your response with this prompt for the SA agent:
 

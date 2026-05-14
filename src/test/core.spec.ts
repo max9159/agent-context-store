@@ -503,6 +503,8 @@ describe("buildContextPackage", () => {
     assert.ok(result.packagePath.endsWith(".json"));
     const json = JSON.parse(await readText(join(dir, result.packagePath)));
     assert.equal(json.task_id, "TASK-200");
+    assert.equal(json.context_budget.risk, "ok");
+    assert.equal(json.context_budget.max_tokens, 100000);
   });
 
   test("rejects unknown package roles", async () => {
@@ -510,6 +512,65 @@ describe("buildContextPackage", () => {
       () => buildContextPackage({ rootDir: dir, taskId: "TASK-200", role: "totallyfake" }),
       /Unknown role/
     );
+  });
+
+  test("reports warning, high, and split-recommended context budget risks", async () => {
+    const warning = await buildContextPackage({ rootDir: dir, taskId: "TASK-200", role: "dev", format: "json", maxTokens: 120 });
+    const warningJson = JSON.parse(await readText(join(dir, warning.packagePath)));
+    assert.equal(warningJson.context_budget.risk, "warning");
+
+    await createArtifact({ rootDir: dir, type: "sdd", taskId: "TASK-MULTI-BUDGET", title: "Budget SDD" });
+    await createArtifact({ rootDir: dir, type: "adr", taskId: "TASK-MULTI-BUDGET", title: "Budget ADR" });
+    await createArtifact({ rootDir: dir, type: "api-design", taskId: "TASK-MULTI-BUDGET", title: "Budget API" });
+    const baseline = await buildContextPackage({ rootDir: dir, taskId: "TASK-MULTI-BUDGET", role: "dev", format: "json", maxTokens: 100000 });
+    const baselineJson = JSON.parse(await readText(join(dir, baseline.packagePath)));
+    const highMaxTokens = Math.ceil(baselineJson.context_budget.estimated_tokens / 1.3);
+    const high = await buildContextPackage({ rootDir: dir, taskId: "TASK-MULTI-BUDGET", role: "dev", format: "json", maxTokens: highMaxTokens });
+    const highJson = JSON.parse(await readText(join(dir, high.packagePath)));
+    assert.equal(highJson.context_budget.risk, "high");
+
+    const split = await buildContextPackage({ rootDir: dir, taskId: "TASK-200", role: "dev", format: "json", maxTokens: 40 });
+    const splitJson = JSON.parse(await readText(join(dir, split.packagePath)));
+    assert.equal(splitJson.context_budget.risk, "split_recommended");
+    assert.equal(splitJson.context_budget.recommended_action, "split_phase_documents");
+  });
+
+  test("reports a single oversized artifact as split recommended", async () => {
+    const result = await buildContextPackage({ rootDir: dir, taskId: "TASK-200", role: "dev", format: "json", maxTokens: 10 });
+    const json = JSON.parse(await readText(join(dir, result.packagePath)));
+    assert.equal(json.context_budget.risk, "split_recommended");
+    assert.ok(json.context_budget.oversized_artifacts.some((artifact: { path: string }) => artifact.path.includes("SRS-TASK-200.md")));
+  });
+
+  test("loads context budget from acs.yaml and role overrides", async () => {
+    const configuredDir = makeTempDir("acs-core-budget-config-");
+    try {
+      await initContextStore({ rootDir: configuredDir });
+      await createArtifact({ rootDir: configuredDir, type: "srs", taskId: "TASK-BUDGET", title: "Budget SRS" });
+      const acsPath = join(configuredDir, ".acs", "acs.yaml");
+      const acs = await readText(acsPath);
+      await writeFile(acsPath, acs.replace("  default_max_tokens: 100000", "  default_max_tokens: 40"), "utf8");
+
+      const globalResult = await buildContextPackage({ rootDir: configuredDir, taskId: "TASK-BUDGET", role: "dev", format: "json" });
+      const globalJson = JSON.parse(await readText(join(configuredDir, globalResult.packagePath)));
+      assert.equal(globalJson.context_budget.max_tokens, 40);
+      assert.equal(globalJson.context_budget.risk, "split_recommended");
+
+      const rolePath = join(configuredDir, ".acs", "roles", "dev.yaml");
+      const role = await readText(rolePath);
+      await writeFile(rolePath, `${role}\ncontext_budget:\n  max_tokens: 200000\n`, "utf8");
+      const roleResult = await buildContextPackage({ rootDir: configuredDir, taskId: "TASK-BUDGET", role: "dev", format: "json" });
+      const roleJson = JSON.parse(await readText(join(configuredDir, roleResult.packagePath)));
+      assert.equal(roleJson.context_budget.max_tokens, 200000);
+      assert.equal(roleJson.context_budget.risk, "ok");
+
+      const flagResult = await buildContextPackage({ rootDir: configuredDir, taskId: "TASK-BUDGET", role: "dev", format: "json", maxTokens: 60 });
+      const flagJson = JSON.parse(await readText(join(configuredDir, flagResult.packagePath)));
+      assert.equal(flagJson.context_budget.max_tokens, 60);
+      assert.equal(flagJson.context_budget.risk, "split_recommended");
+    } finally {
+      await cleanupTempDir(configuredDir);
+    }
   });
 });
 
