@@ -1,6 +1,6 @@
 {
   "name": "agent-context-store",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "acs CLI for Agent Context Store Toolkit.",
   "type": "module",
   "license": "MIT",
