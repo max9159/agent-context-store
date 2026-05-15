@@ -304,6 +304,36 @@ describe("Scenario: dedicated mode round-trip", () => {
 // Tests use an isolated envDir as APPDATA/HOME so the real user profile
 // is never touched.
 
+describe("Scenario: linked project uses existing store", () => {
+  let projectDir: string;
+  let storeDir: string;
+  const TASK = "INT-LINK-0001";
+
+  before(() => {
+    projectDir = makeTempDir("acs-int-link-project-");
+    storeDir = makeTempDir("acs-int-link-store-");
+    assert.equal(runCli(["init", "--mode", "dedicated"], { cwd: storeDir }).status, 0);
+    const link = runCli(["link", storeDir], { cwd: projectDir });
+    assert.equal(link.status, 0, `stderr: ${link.stderr}`);
+  });
+
+  after(async () => { await cleanupTempDir(projectDir); await cleanupTempDir(storeDir); });
+
+  test("status resolves the existing store from the linked project", () => {
+    const r = runCli(["status"], { cwd: projectDir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("mode        dedicated"), `stdout: ${r.stdout}`);
+    assert.ok(r.stdout.includes(storeDir), `stdout: ${r.stdout}`);
+  });
+
+  test("artifacts created from the linked project land in the existing store", () => {
+    const r = runCli(["new", "srs", "--task", TASK], { cwd: projectDir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(storeDir, `artifacts/${TASK}/srs/SRS-${TASK}.md`)));
+    assert.ok(!exists(join(projectDir, `.acs/artifacts/${TASK}/srs/SRS-${TASK}.md`)));
+  });
+});
+
 describe("Scenario: local mode isolation", () => {
   let projectDir: string;
   let envDir: string;

@@ -94,6 +94,18 @@ acs init --mode local           # silent, stores in OS user-data dir
 acs init --mode dedicated .     # silent, current dir is the store root
 ```
 
+If the ACS store already exists, link the project instead of initializing:
+
+```bash
+acs link /path/to/existing-store
+acs link /path/to/existing-store --path /path/to/project
+acs link /path/to/existing-store --force
+```
+
+`acs link` only writes the project pointer `.acs/config.yaml`. It does not run
+`init`, seed store assets, install skills, or write to the existing store.
+`--force` only replaces an existing project pointer.
+
 | Mode | Where context is stored | Best for |
 |------|------------------------|----------|
 | **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
@@ -234,6 +246,7 @@ Artifact storage is task-first in this version. Older type-first artifact paths 
 | -------------------- | ------------------------------------------------------------------------------------------------------- |
 | `acs --version`      | Prints the installed CLI version.                                                                       |
 | `acs init`           | Initializes the context store. Runs an interactive wizard on a TTY; pass `--mode` to skip it.          |
+| `acs link`           | Links a project to an existing ACS store by writing only `.acs/config.yaml`.                           |
 | `acs status`         | Shows current mode, store path, initialized state, and artifact/handoff counts.                         |
 | `acs install-skills` | Installs agent-specific skill and instruction files for Cursor, Claude, Codex, or all supported agents. |
 | `acs roles`          | Lists configured role profiles (`ba`, `sa`, `dev`, `qa`).                                              |
@@ -258,6 +271,7 @@ when the advisory reports `warning`, `high`, or `split_recommended`.
 ```bash
 acs --version
 acs init [path] [--mode <in-repo|local|dedicated>]
+acs link <existing_store_path> [--path <project_path>] [--force]
 acs status
 acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
 acs roles
@@ -327,4 +341,4 @@ In short: industry handoff frameworks model handoffs as in-process tool calls be
 
 ## Developing This Repository
 
-If you want to modify or test the toolkit itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
+If you want to modify or test the toolkit itself, see [DEVELOPMENT.md](/docs/DEVELOPMENT.md)

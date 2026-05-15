@@ -1,6 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import os from "node:os";
 import { makeTempDir, cleanupTempDir, exists, readText } from "./helpers.ts";
@@ -16,6 +16,7 @@ import {
   buildIndex,
   doctor,
   getStoreInfo,
+  linkContextStore,
   listRoles,
   explainRole,
   getNextActions,
@@ -120,6 +121,125 @@ describe("initContextStore — dedicated mode", () => {
 
   test("index.json is at root", async () => {
     assert.ok(exists(join(dir, "index.json")));
+  });
+});
+
+// ─── linkContextStore ────────────────────────────────────────────────────────
+
+describe("linkContextStore", () => {
+  test("writes only a project pointer and preserves target mode", async () => {
+    const projectDir = makeTempDir("acs-core-link-project-");
+    const storeDir = makeTempDir("acs-core-link-store-");
+    try {
+      await writeFile(join(storeDir, "config.yaml"), "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: local\n", "utf8");
+
+      const result = await linkContextStore({ projectDir, storeDir });
+      assert.deepEqual(result.created, [".acs/config.yaml"]);
+      assert.deepEqual((await readdir(storeDir)).sort(), ["config.yaml"]);
+
+      const pointer = await readText(join(projectDir, ".acs", "config.yaml"));
+      assert.match(pointer, /mode: local/);
+      assert.ok(pointer.includes(storeDir.replaceAll("\\", "/")), pointer);
+
+      const info = await getStoreInfo(projectDir);
+      assert.equal(info.mode, "local");
+      assert.equal(info.storeDir, storeDir);
+    } finally {
+      await cleanupTempDir(projectDir);
+      await cleanupTempDir(storeDir);
+    }
+  });
+
+  test("validates ACS identity config before linking", async () => {
+    const projectDir = makeTempDir("acs-core-link-invalid-project-");
+    const storeDir = makeTempDir("acs-core-link-invalid-store-");
+    try {
+      await writeFile(join(storeDir, "config.yaml"), "version: 1\nmode: dedicated\n", "utf8");
+      await assert.rejects(() => linkContextStore({ projectDir, storeDir }), /toolkit: agent-context-store/);
+      assert.ok(!exists(join(projectDir, ".acs", "config.yaml")));
+    } finally {
+      await cleanupTempDir(projectDir);
+      await cleanupTempDir(storeDir);
+    }
+  });
+
+  test("requires force to replace an existing different pointer", async () => {
+    const projectDir = makeTempDir("acs-core-link-force-project-");
+    const firstStore = makeTempDir("acs-core-link-force-a-");
+    const secondStore = makeTempDir("acs-core-link-force-b-");
+    try {
+      const config = "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n";
+      await writeFile(join(firstStore, "config.yaml"), config, "utf8");
+      await writeFile(join(secondStore, "config.yaml"), config, "utf8");
+
+      await linkContextStore({ projectDir, storeDir: firstStore });
+      await assert.rejects(() => linkContextStore({ projectDir, storeDir: secondStore }), /--force/);
+
+      const result = await linkContextStore({ projectDir, storeDir: secondStore, force: true });
+      assert.deepEqual(result.updated, [".acs/config.yaml"]);
+      assert.ok((await readText(join(projectDir, ".acs", "config.yaml"))).includes(secondStore.replaceAll("\\", "/")));
+    } finally {
+      await cleanupTempDir(projectDir);
+      await cleanupTempDir(firstStore);
+      await cleanupTempDir(secondStore);
+    }
+  });
+
+  test("fails with a meaningful error for a non-existent project or store path", async () => {
+    const validProject = makeTempDir("acs-core-link-noexist-project-");
+    const validStore = makeTempDir("acs-core-link-noexist-store-");
+    try {
+      const config = "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n";
+      await writeFile(join(validStore, "config.yaml"), config, "utf8");
+
+      const nonExistentPath = join(validProject, "does-not-exist");
+      await assert.rejects(() => linkContextStore({ projectDir: nonExistentPath, storeDir: validStore }), /does not exist/i);
+      await assert.rejects(() => linkContextStore({ projectDir: validProject, storeDir: nonExistentPath }), /does not exist/i);
+    } finally {
+      await cleanupTempDir(validProject);
+      await cleanupTempDir(validStore);
+    }
+  });
+
+  test("fails with a meaningful error when project or store path is a file, not a directory", async () => {
+    const projectDir = makeTempDir("acs-core-link-notdir-project-");
+    const storeDir = makeTempDir("acs-core-link-notdir-store-");
+    try {
+      const filePath = join(projectDir, "a-file.txt");
+      await writeFile(filePath, "not a dir", "utf8");
+
+      const config = "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n";
+      await writeFile(join(storeDir, "config.yaml"), config, "utf8");
+
+      await assert.rejects(() => linkContextStore({ projectDir: filePath, storeDir }), /is not a directory/i);
+      await assert.rejects(() => linkContextStore({ projectDir, storeDir: filePath }), /is not a directory/i);
+    } finally {
+      await cleanupTempDir(projectDir);
+      await cleanupTempDir(storeDir);
+    }
+  });
+
+  test("no-op when pointer already matches the same store and mode", async () => {
+    const projectDir = makeTempDir("acs-core-link-noop-project-");
+    const storeDir = makeTempDir("acs-core-link-noop-store-");
+    try {
+      const config = "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n";
+      await writeFile(join(storeDir, "config.yaml"), config, "utf8");
+
+      const first = await linkContextStore({ projectDir, storeDir });
+      assert.deepEqual(first.created, [".acs/config.yaml"]);
+      assert.deepEqual(first.updated, []);
+
+      const second = await linkContextStore({ projectDir, storeDir });
+      assert.deepEqual(second.created, []);
+      assert.deepEqual(second.updated, []);
+
+      const pointer = await readText(join(projectDir, ".acs", "config.yaml"));
+      assert.match(pointer, /mode: dedicated/);
+    } finally {
+      await cleanupTempDir(projectDir);
+      await cleanupTempDir(storeDir);
+    }
   });
 });
 

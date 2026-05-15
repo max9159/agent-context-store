@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -126,6 +126,12 @@ export interface InitOptions {
    * written in this directory so that `acs status` resolves correctly from it.
    */
   projectDir?: string;
+}
+
+export interface LinkContextStoreOptions {
+  projectDir: string;
+  storeDir: string;
+  force?: boolean;
 }
 
 export interface CreateArtifactOptions {
@@ -443,10 +449,11 @@ defaultPolicy.artifactTypes = [
  * Determine the store root (storeDir) from an input directory.
  *
  * Detection order:
- * 1. <inputDir>/.acs/config.yaml  → in-repo (or local if mode=local)
- * 2. <inputDir>/config.yaml with mode:dedicated → dedicated
- * 3. local registry project mapping → local
- * 4. Fallback: in-repo with storeDir=<inputDir>/.acs (uninitialized)
+ * 1. <inputDir>/.acs/config.yaml with any recognized mode + store_path → linked store
+ * 2. <inputDir>/.acs/config.yaml without store_path → in-repo
+ * 3. <inputDir>/config.yaml with mode:dedicated → dedicated
+ * 4. local registry project mapping → local
+ * 5. Fallback: in-repo with storeDir=<inputDir>/.acs (uninitialized)
  */
 function resolveStoreContext(inputDir: string): StoreContext {
   const projectDir = path.resolve(inputDir);
@@ -456,11 +463,9 @@ function resolveStoreContext(inputDir: string): StoreContext {
   if (existsSync(acsConfigPath)) {
     try {
       const cfg = parseYamlObject(readFileSync(acsConfigPath, "utf8"));
-      if (cfg["mode"] === "local" && typeof cfg["store_path"] === "string") {
-        return { projectDir, storeDir: cfg["store_path"] as string, mode: "local" };
-      }
-      if (cfg["mode"] === "dedicated" && typeof cfg["store_path"] === "string") {
-        return { projectDir, storeDir: cfg["store_path"] as string, mode: "dedicated" };
+      const mode = cfg["mode"];
+      if (isStoreMode(mode) && typeof cfg["store_path"] === "string") {
+        return { projectDir, storeDir: path.resolve(cfg["store_path"]), mode };
       }
     } catch {
       // parse error — treat as in-repo
@@ -657,6 +662,54 @@ export async function initContextStore(options: InitOptions): Promise<AcsResult>
   await writeIfMissing(storeDir, projectDir, "docs/source-reference-rules.md", "# Source Reference Rules\n\nPrefer approved artifacts, issues, commits, PRs, and meeting notes over chat history.\n", result);
   await writeIfMissing(storeDir, projectDir, "docs/approval-state-rules.md", "# Approval State Rules\n\nValid states: draft, ready_for_review, changes_requested, approved, deprecated, superseded.\n", result);
 
+  return result;
+}
+
+export async function linkContextStore(options: LinkContextStoreOptions): Promise<AcsResult> {
+  const projectDir = path.resolve(options.projectDir);
+  const storeDir = path.resolve(options.storeDir);
+  const result = emptyResult();
+
+  await assertDirectory(projectDir, "Project path");
+  await assertDirectory(storeDir, "Store path");
+
+  const targetConfigPath = path.join(storeDir, "config.yaml");
+  if (!existsSync(targetConfigPath)) {
+    throw new Error(`Store path is missing ACS config: ${targetConfigPath}`);
+  }
+
+  const targetConfig = parseYamlObject(await readFile(targetConfigPath, "utf8"));
+  const targetMode = validateAcsIdentityConfig(targetConfig, targetConfigPath);
+  const pointerPath = path.join(projectDir, ".acs", "config.yaml");
+  const pointerContent = renderLinkPointer(targetMode, storeDir);
+
+  if (existsSync(pointerPath)) {
+    const existing = parseYamlObject(await readFile(pointerPath, "utf8"));
+    const existingMode = existing["mode"];
+    const existingStorePath = existing["store_path"];
+    const matches = existingMode === targetMode
+      && typeof existingStorePath === "string"
+      && sameResolvedPath(existingStorePath, storeDir);
+
+    if (matches) {
+      addStoreCompletenessWarnings(storeDir, result);
+      return result;
+    }
+
+    if (!options.force) {
+      throw new Error(`Project already has .acs/config.yaml. Use --force to replace it.`);
+    }
+
+    await writeFile(pointerPath, pointerContent, "utf8");
+    result.updated.push(".acs/config.yaml");
+    addStoreCompletenessWarnings(storeDir, result);
+    return result;
+  }
+
+  await mkdir(path.dirname(pointerPath), { recursive: true });
+  await writeFile(pointerPath, pointerContent, "utf8");
+  result.created.push(".acs/config.yaml");
+  addStoreCompletenessWarnings(storeDir, result);
   return result;
 }
 
@@ -2189,6 +2242,72 @@ function parseYamlObject(content: string): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStoreMode(value: unknown): value is StoreMode {
+  return value === "in-repo" || value === "local" || value === "dedicated";
+}
+
+async function assertDirectory(dirPath: string, label: string): Promise<void> {
+  try {
+    const info = await stat(dirPath);
+    if (!info.isDirectory()) {
+      throw new Error(`${label} is not a directory: ${dirPath}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOTDIR") {
+      throw new Error(`${label} is not a directory: ${dirPath}`);
+    }
+    if (error instanceof Error && error.message.includes("is not a directory")) {
+      throw error;
+    }
+    throw new Error(`${label} does not exist: ${dirPath}`);
+  }
+}
+
+function validateAcsIdentityConfig(config: Record<string, unknown>, configPath: string): StoreMode {
+  if (config["toolkit"] !== "agent-context-store") {
+    throw new Error(`${configPath} is not an ACS config: expected toolkit: agent-context-store`);
+  }
+  if (config["cli"] !== "acs") {
+    throw new Error(`${configPath} is not an ACS config: expected cli: acs`);
+  }
+  if (config["version"] === undefined || config["version"] === null || config["version"] === "") {
+    throw new Error(`${configPath} is not an ACS config: missing version`);
+  }
+  const mode = config["mode"];
+  if (!isStoreMode(mode)) {
+    throw new Error(`${configPath} is not an ACS config: mode must be one of in-repo, local, dedicated`);
+  }
+  return mode;
+}
+
+function renderLinkPointer(mode: StoreMode, storeDir: string): string {
+  return [
+    "version: 1",
+    "toolkit: agent-context-store",
+    "cli: acs",
+    `mode: ${mode}`,
+    `store_path: ${JSON.stringify(toPosix(storeDir))}`,
+    ""
+  ].join("\n");
+}
+
+function sameResolvedPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function addStoreCompletenessWarnings(storeDir: string, result: AcsResult): void {
+  if (!existsSync(path.join(storeDir, "acs.yaml"))) {
+    result.warnings.push("linked store is missing acs.yaml");
+  }
+  if (!schemaFileNames.every((fileName) => existsSync(path.join(storeDir, "schemas", fileName)))) {
+    result.warnings.push("linked store is missing one or more schemas");
+  }
 }
 
 async function listFiles(rootDir: string, extension: string): Promise<string[]> {
