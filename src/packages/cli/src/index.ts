@@ -18,6 +18,7 @@ import {
   getStoreInfo,
   getTasksOverview,
   initContextStore,
+  linkContextStore,
   listHandoffs,
   listRoles,
   readTaskLog,
@@ -129,6 +130,20 @@ async function main(argv: string[]): Promise<void> {
 
     // Interactive wizard
     await runInitWizard();
+    return;
+  }
+
+  if (command === "link") {
+    const args = parseArgs(rest);
+    const storePath = String(args.positional[0] ?? "");
+    if (!storePath) {
+      console.error("ERROR Missing existing store path. Usage: acs link <existing_store_path> [--path <project_path>] [--force]");
+      process.exitCode = 1;
+      return;
+    }
+    const projectPath = getStringFlag(args, "path") ?? process.cwd();
+    const result = await linkContextStore({ projectDir: projectPath, storeDir: storePath, force: !!args.flags["force"] });
+    printResult("Linked project to existing context store", result);
     return;
   }
 
@@ -758,6 +773,7 @@ function printHelp(): void {
 Usage:
   acs --version
   acs init [path] [--mode <in-repo|local|dedicated>]
+  acs link <existing_store_path> [--path <project_path>] [--force]
   acs status
   acs install-skills --agent <cursor|claude|codex|openclaw|all> [--path <path>]
   acs roles
@@ -792,6 +808,8 @@ Examples:
   acs init --mode in-repo                        # same as above
   acs init --mode local                          # local: store in user data dir
   acs init --mode dedicated /path/to/store-repo  # dedicated store repo
+  acs link /path/to/existing-store               # attach current project to an existing store
+  acs link /path/to/existing-store --path D:\\my-repo
   acs status
   acs install-skills --agent cursor
   acs install-skills --agent claude

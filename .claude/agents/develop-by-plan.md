@@ -2,7 +2,7 @@
 name: develop-by-plan
 description: "Use when a user asks to implement an attached, approved, or explicitly accepted plan in the Agent Context Store repository."
 tools: "Read, Glob, Grep, Bash, Edit, MultiEdit, Write"
-model: opus
+model: sonnet
 color: green
 ---
 # Develop By Plan Agent

@@ -1,10 +1,10 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { makeTempDir, cleanupTempDir, runCli, exists } from "./helpers.ts";
+import { makeTempDir, cleanupTempDir, runCli, exists, readText } from "./helpers.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -23,6 +23,11 @@ describe("acs --help", () => {
     const r = runCli(["--help"]);
     assert.ok(r.stdout.includes("--mode"), `stdout: ${r.stdout}`);
   });
+
+  test("mentions link command", () => {
+    const r = runCli(["--help"]);
+    assert.ok(r.stdout.includes("acs link <existing_store_path>"), `stdout: ${r.stdout}`);
+  });
 });
 
 describe("acs --version", () => {
@@ -38,6 +43,182 @@ describe("acs --version", () => {
     assert.equal(r.status, 0);
     const pkg = JSON.parse(await readFile(join(repoRoot, "src/packages/cli/package.json"), "utf8")) as { version: string };
     assert.ok(r.stdout.includes(`acs ${pkg.version}`));
+  });
+});
+
+// ─── acs link ────────────────────────────────────────────────────────────────
+
+describe("acs link", () => {
+  let projectDir: string;
+  let storeDir: string;
+  before(() => {
+    projectDir = makeTempDir("acs-cli-link-project-");
+    storeDir = makeTempDir("acs-cli-link-store-");
+  });
+  after(async () => { await cleanupTempDir(projectDir); await cleanupTempDir(storeDir); });
+
+  test("creates only a project pointer to an existing ACS store", async () => {
+    await writeFile(join(storeDir, "config.yaml"), "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n", "utf8");
+
+    const r = runCli(["link", storeDir], { cwd: projectDir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+
+    const pointerPath = join(projectDir, ".acs", "config.yaml");
+    assert.ok(exists(pointerPath), ".acs/config.yaml should exist");
+    const pointer = await readText(pointerPath);
+    assert.match(pointer, /mode: dedicated/);
+    assert.match(pointer, /store_path:/);
+    assert.ok(pointer.includes(storeDir.replaceAll("\\", "/")), pointer);
+
+    assert.deepEqual((await readdir(storeDir)).sort(), ["config.yaml"], "link must not create files in the existing store");
+  });
+
+  test("status resolves through the linked store path", async () => {
+    const r = runCli(["status"], { cwd: projectDir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("mode        dedicated"), `stdout: ${r.stdout}`);
+    assert.ok(r.stdout.includes(storeDir), `stdout: ${r.stdout}`);
+    assert.ok(r.stdout.includes("initialized yes") || r.stdout.includes("initialized  yes"), `stdout: ${r.stdout}`);
+  });
+
+  test("preserves a non-dedicated target config mode in the pointer", async () => {
+    const localProject = makeTempDir("acs-cli-link-local-project-");
+    const localStore = makeTempDir("acs-cli-link-local-store-");
+    try {
+      await writeFile(join(localStore, "config.yaml"), "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: in-repo\n", "utf8");
+      const r = runCli(["link", localStore], { cwd: localProject });
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      const pointer = await readText(join(localProject, ".acs", "config.yaml"));
+      assert.match(pointer, /mode: in-repo/);
+
+      const status = runCli(["status"], { cwd: localProject });
+      assert.equal(status.status, 0, `stderr: ${status.stderr}`);
+      assert.ok(status.stdout.includes("mode        in-repo"), `stdout: ${status.stdout}`);
+      assert.ok(status.stdout.includes(localStore), `stdout: ${status.stdout}`);
+    } finally {
+      await cleanupTempDir(localProject);
+      await cleanupTempDir(localStore);
+    }
+  });
+
+  test("supports --path to link a project outside cwd", async () => {
+    const cwd = makeTempDir("acs-cli-link-cwd-");
+    const pathProject = makeTempDir("acs-cli-link-path-project-");
+    const pathStore = makeTempDir("acs-cli-link-path-store-");
+    try {
+      await writeFile(join(pathStore, "config.yaml"), "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n", "utf8");
+      const r = runCli(["link", pathStore, "--path", pathProject], { cwd });
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.ok(exists(join(pathProject, ".acs", "config.yaml")));
+      assert.ok(!exists(join(cwd, ".acs", "config.yaml")));
+    } finally {
+      await cleanupTempDir(cwd);
+      await cleanupTempDir(pathProject);
+      await cleanupTempDir(pathStore);
+    }
+  });
+
+  test("fails for a target without ACS identity config", async () => {
+    const badProject = makeTempDir("acs-cli-link-bad-project-");
+    const badStore = makeTempDir("acs-cli-link-bad-store-");
+    try {
+      const r = runCli(["link", badStore], { cwd: badProject });
+      assert.notEqual(r.status, 0);
+      assert.ok(!exists(join(badProject, ".acs", "config.yaml")), "failed link must not write project pointer");
+    } finally {
+      await cleanupTempDir(badProject);
+      await cleanupTempDir(badStore);
+    }
+  });
+
+  test("requires --force to replace a different existing pointer", async () => {
+    const forceProject = makeTempDir("acs-cli-link-force-project-");
+    const firstStore = makeTempDir("acs-cli-link-force-store-a-");
+    const secondStore = makeTempDir("acs-cli-link-force-store-b-");
+    try {
+      const config = "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n";
+      await writeFile(join(firstStore, "config.yaml"), config, "utf8");
+      await writeFile(join(secondStore, "config.yaml"), config, "utf8");
+
+      assert.equal(runCli(["link", firstStore], { cwd: forceProject }).status, 0);
+      const blocked = runCli(["link", secondStore], { cwd: forceProject });
+      assert.notEqual(blocked.status, 0);
+      assert.ok((await readText(join(forceProject, ".acs", "config.yaml"))).includes(firstStore.replaceAll("\\", "/")));
+
+      const replaced = runCli(["link", secondStore, "--force"], { cwd: forceProject });
+      assert.equal(replaced.status, 0, `stderr: ${replaced.stderr}`);
+      assert.ok((await readText(join(forceProject, ".acs", "config.yaml"))).includes(secondStore.replaceAll("\\", "/")));
+    } finally {
+      await cleanupTempDir(forceProject);
+      await cleanupTempDir(firstStore);
+      await cleanupTempDir(secondStore);
+    }
+  });
+
+  test("fails for a non-existent store path", () => {
+    const nonExistentStore = join(projectDir, "does-not-exist-store");
+    const r = runCli(["link", nonExistentStore], { cwd: projectDir });
+    assert.notEqual(r.status, 0);
+    assert.ok(
+      r.stdout.includes("does not exist") || r.stderr.includes("does not exist"),
+      `expected "does not exist" in output; stdout: ${r.stdout} stderr: ${r.stderr}`
+    );
+  });
+
+  test("fails for a non-existent project path via --path", () => {
+    const nonExistentProject = join(projectDir, "does-not-exist-project");
+    const r = runCli(["link", storeDir, "--path", nonExistentProject], { cwd: projectDir });
+    assert.notEqual(r.status, 0);
+    assert.ok(
+      r.stdout.includes("does not exist") || r.stderr.includes("does not exist"),
+      `expected "does not exist" in output; stdout: ${r.stdout} stderr: ${r.stderr}`
+    );
+  });
+
+  test("fails when store path is a file, not a directory", async () => {
+    const filePath = join(projectDir, "a-regular-file.txt");
+    await writeFile(filePath, "not a directory", "utf8");
+    const r = runCli(["link", filePath], { cwd: projectDir });
+    assert.notEqual(r.status, 0);
+    assert.ok(
+      r.stdout.includes("not a directory") || r.stderr.includes("not a directory"),
+      `expected "not a directory" in output; stdout: ${r.stdout} stderr: ${r.stderr}`
+    );
+  });
+
+  test("no-op when pointer already matches the same store succeeds without changes", async () => {
+    const noopProject = makeTempDir("acs-cli-link-noop-project-");
+    const noopStore = makeTempDir("acs-cli-link-noop-store-");
+    try {
+      await writeFile(join(noopStore, "config.yaml"), "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n", "utf8");
+
+      const first = runCli(["link", noopStore], { cwd: noopProject });
+      assert.equal(first.status, 0, `first link failed: ${first.stderr}`);
+      assert.ok(first.stdout.includes("created"), `expected "created" in stdout: ${first.stdout}`);
+
+      const second = runCli(["link", noopStore], { cwd: noopProject });
+      assert.equal(second.status, 0, `second link (no-op) failed: ${second.stderr}`);
+      assert.ok(!second.stdout.includes("created") && !second.stdout.includes("updated"),
+        `no-op should not report created/updated; stdout: ${second.stdout}`);
+    } finally {
+      await cleanupTempDir(noopProject);
+      await cleanupTempDir(noopStore);
+    }
+  });
+
+  test("exits 0 with warning lines when linked store is missing acs.yaml or schemas", async () => {
+    const warnProject = makeTempDir("acs-cli-link-warn-project-");
+    const warnStore = makeTempDir("acs-cli-link-warn-store-");
+    try {
+      await writeFile(join(warnStore, "config.yaml"), "version: 1\ntoolkit: agent-context-store\ncli: acs\nmode: dedicated\n", "utf8");
+      const r = runCli(["link", warnStore], { cwd: warnProject });
+      assert.equal(r.status, 0, `expected exit 0 with warnings; stderr: ${r.stderr}`);
+      const combined = r.stdout + r.stderr;
+      assert.ok(combined.includes("warning"), `expected at least one warning line; output: ${combined}`);
+    } finally {
+      await cleanupTempDir(warnProject);
+      await cleanupTempDir(warnStore);
+    }
   });
 });
 
