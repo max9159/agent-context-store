@@ -9,6 +9,54 @@ npm install -g agent-context-store
 acs --help
 ```
 
+## Architecture
+
+Runtime layout for developers — how agents, the CLI, core library, and the context store connect.
+
+```mermaid
+flowchart TD
+    DEV(["Developer"])
+    BA(["Business Analyst"])
+    SA(["Solution Architect"])
+
+    subgraph PROJECT["Project Repository"]
+        CODE["Source Code\n(your codebase)"]
+    end
+    subgraph AGENT["AI Agent Runtime  —  Cursor · Claude Code · Codex"]
+        AI["AI Agent Sessions"]
+        SKILLS["Agent Skill Files\nSKILL.md · AGENTS.md · CLAUDE.md"]
+
+    end
+
+    subgraph ACS["Agent Context Store  (acs)"]
+        CLI["acs CLI\nnpm global binary"]
+        CORE["acs Core Library\nstore resolution · policy · artifacts · handoff · packaging"]
+    end
+
+    subgraph DEDICATED["Dedicated Context Store Repo"]
+        STORE[("Shared Store\nartifacts · handoffs · packages · index.json")]
+    end
+
+    BA -->|"prompts to write requirements"| AI
+    SA -->|"prompts to write system design"| AI
+    DEV -->|"prompts to implement feature"| AI
+    CLI -->|"acs install-skills"| SKILLS
+    AI -->|"reads & edits code"| CODE
+    AI -->|"reads on session start"| SKILLS
+    AI -->|"acs new · handoff · package · validate"| CLI
+    CLI -->|"delegates all store ops"| CORE
+    CORE -->|"writes SRS · design docs · ADRs · handoffs (schema-validated)"| STORE
+    STORE -->|"reads artifacts · packages · index"| CORE
+```
+
+| Step | What happens |
+|------|--------------|
+| **1 · Install skills** | `acs install-skills` copies `SKILL.md` / `AGENTS.md` / `CLAUDE.md` into each agent's config directory — teaches the agent which role commands to run. |
+| **2 · Agent reads skills** | On task start the agent reads its skill file to learn the `acs` command set and the BA→SA→Dev→QA handoff chain. |
+| **3 · Agent creates artifacts** | Each role agent calls `acs <role> new` to produce schema-validated artifacts with structured frontmatter (task ID, role, type, status, timestamps). |
+| **4 · Structured handoff** | On completion, the agent calls `acs handoff create` to produce a validated YAML handoff record — the contract the next agent must check (`acs handoff check`) and package (`acs package`) before starting. |
+| **5 · Store persists context** | All artifacts, handoff records, and role packages are written to the dedicated Git-tracked store and shared across all role agents and CI pipelines. |
+
 ## Repository Setup
 
 This repository is a pnpm workspace monorepo and uses `pnpm@10.33.0`.
