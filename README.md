@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/max9159/agent-context-store)
+
 # Agent Context Store
 
 Agent Context Store (`acs`) is a Git-backed handoff toolkit for BA, SA, Dev, and QA agents to produce validated SDLC artifacts — SRS, design docs, ADRs, API specs, test plans — and relay them through confirmed handoff records. Works with Cursor, Claude Code, Codex, CI, and custom runtimes.
