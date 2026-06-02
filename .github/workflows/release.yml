@@ -32,7 +32,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+          # NOTE: deliberately no `registry-url`. Setting it makes setup-node
+          # export NPM_CONFIG_USERCONFIG -> $RUNNER_TEMP/.npmrc, which shadows
+          # ~/.npmrc and pins auth to ${NODE_AUTH_TOKEN}. We write the token
+          # into ~/.npmrc explicitly below instead.
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -104,7 +107,25 @@ jobs:
         run: pnpm test
 
       - name: Authenticate with npm registry
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is empty — set it in repo Settings → Secrets → Actions"
+            exit 1
+          fi
+          # Write to the user config that pnpm/npm actually read (no NPM_CONFIG_USERCONFIG override now)
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          # Non-fatal probe: prove the token has write access via a reversible dist-tag round-trip
+          V=$(npm view agent-context-store-core version || echo "")
+          if [ -n "$V" ]; then
+            if npm dist-tag add "agent-context-store-core@${V}" ci-auth-probe; then
+              npm dist-tag rm agent-context-store-core ci-auth-probe || true
+              echo "npm auth probe: write access confirmed"
+            else
+              echo "::warning::npm auth probe could not write — publish will likely fail (token read-only or wrong account)"
+            fi
+          fi
 
       - name: Dry run — core
         run: pnpm --filter "agent-context-store-core" publish --tag ${{ steps.bump.outputs.dist_tag }} --dry-run --no-git-checks
