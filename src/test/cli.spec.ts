@@ -5,6 +5,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { makeTempDir, cleanupTempDir, runCli, exists, readText } from "./helpers.ts";
+import { buildRendererJs } from "../packages/cli/dist/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -691,6 +692,12 @@ describe("acs site build", () => {
     assert.equal(r.status, 0);
     assert.ok(r.stdout.includes("site build"), `expected "site build" in help; stdout: ${r.stdout}`);
   });
+
+  test("--task with a nonexistent task prints a notice and exits 0", () => {
+    const r = runCli(["site", "build", "--task", "TASK-DOES-NOT-EXIST"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("notice") || r.stdout.includes("no artifacts"), `expected notice in stdout: ${r.stdout}`);
+  });
 });
 
 // ─── existing commands unaffected after site build ────────────────────────────
@@ -729,5 +736,106 @@ describe("existing commands unaffected by site build", () => {
     for (const artifact of index.artifacts) {
       assert.ok(!(artifact.path as string).includes("site/"), `index should not include site/ artifact: ${artifact.path as string}`);
     }
+  });
+});
+
+// ─── Markdown renderer unit tests ─────────────────────────────────────────────
+
+describe("Markdown renderer (buildRendererJs)", () => {
+  // Evaluate the renderer once for the entire describe block.
+  type Renderer = { renderMarkdown: (src: string) => string; renderInline: (text: string) => string };
+  const renderer: Renderer = new Function(buildRendererJs())() as Renderer;
+  const { renderMarkdown, renderInline } = renderer;
+
+  test("renders h1..h6 headings", () => {
+    assert.ok(renderMarkdown("# Hello").includes("<h1>Hello</h1>"));
+    assert.ok(renderMarkdown("## Sub").includes("<h2>Sub</h2>"));
+    assert.ok(renderMarkdown("###### Deep").includes("<h6>Deep</h6>"));
+  });
+
+  test("renders unordered lists", () => {
+    const html = renderMarkdown("- apple\n- banana");
+    assert.ok(html.includes("<ul>"), `expected <ul>: ${html}`);
+    assert.ok(html.includes("</ul>"), `expected </ul>: ${html}`);
+    assert.ok(html.includes("<li>apple</li>"), `expected apple li: ${html}`);
+    assert.ok(html.includes("<li>banana</li>"), `expected banana li: ${html}`);
+  });
+
+  test("renders ordered lists", () => {
+    const html = renderMarkdown("1. first\n2. second");
+    assert.ok(html.includes("<ol>"), `expected <ol>: ${html}`);
+    assert.ok(html.includes("</ol>"), `expected </ol>: ${html}`);
+    assert.ok(html.includes("<li>first</li>"), `expected first li: ${html}`);
+    assert.ok(html.includes("<li>second</li>"), `expected second li: ${html}`);
+  });
+
+  test("renders fenced code blocks", () => {
+    const fence = String.fromCharCode(96, 96, 96);
+    const html = renderMarkdown(`${fence}js\nconsole.log('hi');\n${fence}`);
+    assert.ok(html.includes("<pre>"), `expected <pre>: ${html}`);
+    assert.ok(html.includes("<code"), `expected <code: ${html}`);
+    assert.ok(html.includes("lang-js"), `expected lang-js class: ${html}`);
+    assert.ok(html.includes("console.log(&#39;hi&#39;);"), `expected escaped content: ${html}`);
+  });
+
+  test("renders inline code", () => {
+    const bt = String.fromCharCode(96);
+    const html = renderInline(`some ${bt}code here${bt} text`);
+    assert.ok(html.includes("<code>code here</code>"), `expected inline code: ${html}`);
+  });
+
+  test("renders safe http and https links", () => {
+    const html = renderInline("[click](https://example.com)");
+    assert.ok(html.includes('<a href="https://example.com">'), `expected anchor: ${html}`);
+    assert.ok(html.includes("click"), `expected label: ${html}`);
+  });
+
+  test("renders mailto links", () => {
+    const html = renderInline("[email](mailto:test@example.com)");
+    assert.ok(html.includes("mailto:"), `expected mailto scheme in href: ${html}`);
+    assert.ok(html.includes("<a "), `expected anchor element: ${html}`);
+  });
+
+  test("renders relative and anchor links", () => {
+    const relHtml = renderInline("[rel](/path/to/page)");
+    assert.ok(relHtml.includes('<a href="/path/to/page">'), `expected relative anchor: ${relHtml}`);
+    const anchorHtml = renderInline("[anchor](#section)");
+    assert.ok(anchorHtml.includes('<a href="#section">'), `expected hash anchor: ${anchorHtml}`);
+  });
+
+  test("rejects javascript: URLs — degrades to label text only", () => {
+    const html = renderInline("[click](javascript:alert(1))");
+    assert.ok(!html.includes("<a "), `must not emit anchor: ${html}`);
+    assert.ok(!html.includes("javascript:"), `must not include scheme in output: ${html}`);
+    assert.ok(html.includes("click"), `label must still appear as text: ${html}`);
+  });
+
+  test("rejects data: URLs", () => {
+    const html = renderInline("[img](data:text/html,<script>evil()</script>)");
+    assert.ok(!html.includes("<a "), `must not emit anchor for data: URL: ${html}`);
+  });
+
+  test("rejects vbscript: URLs", () => {
+    const html = renderInline("[x](vbscript:msgbox(1))");
+    assert.ok(!html.includes("<a "), `must not emit anchor for vbscript: URL: ${html}`);
+  });
+
+  test("escapes HTML in normal text", () => {
+    const html = renderMarkdown("<script>alert('xss')</script>");
+    assert.ok(!html.includes("<script>"), `must not include raw <script>: ${html}`);
+    assert.ok(html.includes("&lt;script&gt;"), `expected escaped script tag: ${html}`);
+  });
+
+  test("escapes & < > in paragraphs", () => {
+    const html = renderMarkdown("a & b < c > d");
+    assert.ok(html.includes("&amp;"), `expected &amp;: ${html}`);
+    assert.ok(html.includes("&lt;"), `expected &lt;: ${html}`);
+    assert.ok(html.includes("&gt;"), `expected &gt;: ${html}`);
+  });
+
+  test("escapes HTML special chars in link labels", () => {
+    const html = renderInline("[<evil>](https://example.com)");
+    assert.ok(!html.includes("<evil>"), `must escape label: ${html}`);
+    assert.ok(html.includes("&lt;evil&gt;"), `expected escaped label: ${html}`);
   });
 });

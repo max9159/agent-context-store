@@ -156,6 +156,8 @@ export interface DeriveKanbanStateOptions {
   rolesWithArtifacts: string[];
   validationErrors: string[];
   hasApprovedQaSignoff: boolean;
+  /** True when any handoff for this task has a pending-approval status. */
+  hasPendingHandoff?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1404,16 +1406,17 @@ export async function doctor(rootDirInput: string): Promise<ValidationResult> {
  * Derive the Kanban state for a task.
  *
  * Rules (applied in precedence order):
- * 1. Blocked — any validation errors exist (overrides role stage)
+ * 1. Blocked — any validation errors exist (overrides all other states)
  * 2. Done    — QA has artifacts AND has approved signoff AND no errors
- * 3. Role stage based on the highest role that has artifacts
- * 4. Entry   — no roles have artifacts
+ * 3. Review  — any handoff has a pending-approval status (artifacts ready for review)
+ * 4. Role stage based on the highest role that has artifacts
+ * 5. Entry   — no roles have artifacts
  */
 export function deriveKanbanState(options: DeriveKanbanStateOptions): KanbanState {
-  const { rolesWithArtifacts, validationErrors, hasApprovedQaSignoff } = options;
+  const { rolesWithArtifacts, validationErrors, hasApprovedQaSignoff, hasPendingHandoff } = options;
   const hasErrors = validationErrors.length > 0;
 
-  // Blocked takes precedence over role-stage when errors exist (and there are roles or errors)
+  // Blocked takes precedence over all other states when errors exist
   if (hasErrors) {
     return "Blocked";
   }
@@ -1421,6 +1424,11 @@ export function deriveKanbanState(options: DeriveKanbanStateOptions): KanbanStat
   // Done: QA has artifacts and approved signoff and no errors
   if (rolesWithArtifacts.includes("qa") && hasApprovedQaSignoff) {
     return "Done";
+  }
+
+  // Review: a handoff exists with pending approval (artifacts ready for review)
+  if (hasPendingHandoff) {
+    return "Review";
   }
 
   // Role-stage precedence: last role in pipeline wins
@@ -1501,7 +1509,12 @@ export async function buildSiteModel(rootDirInput: string, taskFilter?: string):
       (a) => a.type === "qa-signoff" && a.approvalStatus === "approved"
     );
 
-    const kanbanState = deriveKanbanState({ rolesWithArtifacts, validationErrors: taskErrors, hasApprovedQaSignoff });
+    // Check for any pending-approval handoff for this task
+    const hasPendingHandoff = taskHandoffs.some(
+      (h) => h.approvalStatus === "pending" || h.approvalStatus === "pending_approval"
+    );
+
+    const kanbanState = deriveKanbanState({ rolesWithArtifacts, validationErrors: taskErrors, hasApprovedQaSignoff, hasPendingHandoff });
 
     // Timeline from audit log
     let timeline: AuditLogEvent[] = [];
