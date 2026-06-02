@@ -103,6 +103,11 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Authenticate with npm registry
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+          npm whoami
+
       - name: Dry run — core
         run: pnpm --filter "agent-context-store-core" publish --tag ${{ steps.bump.outputs.dist_tag }} --dry-run --no-git-checks
 
@@ -111,13 +116,9 @@ jobs:
 
       - name: Publish core
         run: pnpm --filter "agent-context-store-core" publish --tag ${{ steps.bump.outputs.dist_tag }} --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish cli
         run: pnpm --filter "agent-context-store" publish --tag ${{ steps.bump.outputs.dist_tag }} --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify registry
         run: |
