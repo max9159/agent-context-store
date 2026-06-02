@@ -1183,7 +1183,13 @@ export function buildRendererJs(): string {
   return lines.join("\n");
 }
 
-main(process.argv.slice(2)).catch((error: unknown) => {
-  console.error(`ERROR ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+// Only run the CLI when this module is the entry point, not when imported
+// (e.g. tests importing buildRendererJs must not trigger main()).
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const modulePath = fileURLToPath(import.meta.url);
+if (invokedPath && (invokedPath === modulePath || invokedPath === modulePath.replace(/\.js$/, ""))) {
+  main(process.argv.slice(2)).catch((error: unknown) => {
+    console.error(`ERROR ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
