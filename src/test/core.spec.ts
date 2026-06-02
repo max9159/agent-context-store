@@ -20,7 +20,10 @@ import {
   listRoles,
   explainRole,
   getNextActions,
-  type ArtifactType
+  buildSiteModel,
+  deriveKanbanState,
+  type ArtifactType,
+  type SiteTask
 } from "../packages/core/dist/index.js";
 
 // ─── initContextStore — Mode 1 (in-repo, default) ────────────────────────────
@@ -737,5 +740,133 @@ describe("dedicated mode — artifact round-trip", () => {
   test("validates dedicated store", async () => {
     const result = await validateContextStore(dir);
     assert.equal(result.valid, true, `Errors: ${result.errors.join(", ")}`);
+  });
+});
+
+// ─── buildSiteModel ───────────────────────────────────────────────────────────
+
+describe("buildSiteModel", () => {
+  let dir: string;
+
+  before(async () => {
+    dir = makeTempDir("acs-core-site-");
+    await initContextStore({ rootDir: dir });
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "SITE-001", title: "Site SRS" });
+    await createArtifact({ rootDir: dir, type: "sdd", taskId: "SITE-001", title: "Site SDD" });
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "SITE-002", title: "Second Task SRS" });
+  });
+
+  after(() => cleanupTempDir(dir));
+
+  test("returns a SiteModel with required top-level keys", async () => {
+    const model = await buildSiteModel(dir);
+    assert.ok(typeof model.generatedAt === "string", "generatedAt should be a string");
+    assert.ok(typeof model.store === "object" && model.store !== null, "store should be an object");
+    assert.ok(Array.isArray(model.tasks), "tasks should be an array");
+    assert.ok(Array.isArray(model.artifacts), "artifacts should be an array");
+    assert.ok(Array.isArray(model.handoffs), "handoffs should be an array");
+    assert.ok(typeof model.validation === "object" && model.validation !== null, "validation should be an object");
+  });
+
+  test("groups artifacts by frontmatter task_id, not directory name", async () => {
+    const model = await buildSiteModel(dir);
+    const task1 = model.tasks.find((t: SiteTask) => t.taskId === "SITE-001");
+    const task2 = model.tasks.find((t: SiteTask) => t.taskId === "SITE-002");
+    assert.ok(task1, "SITE-001 task should exist");
+    assert.ok(task2, "SITE-002 task should exist");
+    assert.equal(task1!.artifactCount, 2, "SITE-001 should have 2 artifacts");
+    assert.equal(task2!.artifactCount, 1, "SITE-002 should have 1 artifact");
+  });
+
+  test("task includes artifacts, handoffs, timeline, and nextActionsByRole fields", async () => {
+    const model = await buildSiteModel(dir);
+    const task = model.tasks.find((t: SiteTask) => t.taskId === "SITE-001");
+    assert.ok(task, "SITE-001 should exist");
+    assert.ok(Array.isArray(task!.artifacts), "task.artifacts should be an array");
+    assert.ok(Array.isArray(task!.handoffs), "task.handoffs should be an array");
+    assert.ok(Array.isArray(task!.timeline), "task.timeline should be an array");
+    assert.ok(typeof task!.nextActionsByRole === "object", "task.nextActionsByRole should be an object");
+    assert.ok(typeof task!.kanbanState === "string", "task.kanbanState should be a string");
+  });
+
+  test("model artifacts list uses frontmatter task_id as source of truth", async () => {
+    const model = await buildSiteModel(dir);
+    for (const artifact of model.artifacts) {
+      assert.ok(typeof artifact.taskId === "string", "artifact.taskId should be a string");
+      assert.ok(artifact.taskId.length > 0, "artifact.taskId should not be empty");
+    }
+    const site001Artifacts = model.artifacts.filter((a: { taskId: string }) => a.taskId === "SITE-001");
+    assert.equal(site001Artifacts.length, 2);
+  });
+
+  test("taskFilter limits results to the specified task", async () => {
+    const model = await buildSiteModel(dir, "SITE-001");
+    const taskIds = model.tasks.map((t: SiteTask) => t.taskId);
+    assert.ok(taskIds.includes("SITE-001"), "filtered model should include SITE-001");
+    assert.ok(!taskIds.includes("SITE-002"), "filtered model should not include SITE-002");
+    const artifactTaskIds = new Set(model.artifacts.map((a: { taskId: string }) => a.taskId));
+    assert.ok(!artifactTaskIds.has("SITE-002"), "filtered artifacts should not include SITE-002");
+  });
+
+  test("store field reflects resolved store info", async () => {
+    const model = await buildSiteModel(dir);
+    assert.ok(typeof model.store.storeDir === "string", "store.storeDir should be a string");
+    assert.ok(typeof model.store.mode === "string", "store.mode should be a string");
+  });
+
+  test("validation result is included in model", async () => {
+    const model = await buildSiteModel(dir);
+    assert.ok(typeof model.validation.valid === "boolean", "validation.valid should be a boolean");
+    assert.ok(Array.isArray(model.validation.errors), "validation.errors should be an array");
+    assert.ok(Array.isArray(model.validation.warnings), "validation.warnings should be an array");
+  });
+});
+
+// ─── deriveKanbanState ────────────────────────────────────────────────────────
+
+describe("deriveKanbanState", () => {
+  test("returns Entry when no roles have artifacts", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: [], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "Entry");
+  });
+
+  test("returns BA when only BA has artifacts and no errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "BA");
+  });
+
+  test("returns SA when SA has artifacts", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "SA");
+  });
+
+  test("returns DEV when dev has artifacts", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "DEV");
+  });
+
+  test("returns QA when qa has artifacts but no approved signoff", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "QA");
+  });
+
+  test("returns Done when qa has artifacts and has approved signoff and no errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: true });
+    assert.equal(state, "Done");
+  });
+
+  test("Blocked takes precedence over role-stage state when errors exist", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: ["Missing required artifact"], hasApprovedQaSignoff: false });
+    assert.equal(state, "Blocked");
+  });
+
+  test("Done requires no validation errors even with approved signoff", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: ["Some error"], hasApprovedQaSignoff: true });
+    assert.equal(state, "Blocked");
+  });
+
+  test("returns Entry when rolesWithArtifacts is empty even with errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: [], validationErrors: ["Store missing dir"], hasApprovedQaSignoff: false });
+    assert.equal(state, "Blocked");
   });
 });
