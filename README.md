@@ -289,12 +289,36 @@ For the full directory tree and file-by-file guide, see [ACS Context Store Full 
 | `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             |
 | `acs package`        | Builds a role-specific context package for the next agent or automation step.                           |
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      |
+| `acs site build`     | Generates a zero-dependency static HTML dashboard under the store `site/` directory.                    |
 
 `acs package` includes a context budget advisory in Markdown and JSON output.
 Use `--max-tokens <N>` to override the configured budget for one run. The CLI
 does not split or rewrite artifacts; role skills decide semantic phase documents
 when the advisory reports `warning`, `high`, or `split_recommended`.
 | `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              |
+
+### Static site dashboard
+
+```bash
+acs site build                    # build site under .acs/site/ (in-repo mode)
+acs site build --task DEMO-0001   # build site focused on a single task
+```
+
+The generated site is written under the resolved ACS store root at `site/`:
+
+```
+site/
+  index.html
+  assets/
+    site.css
+    site.js
+  data/
+    model.json
+```
+
+Open `site/index.html` in any browser. No web server or external dependencies required.
+Views: Dashboard, Kanban board, Artifact browser, Handoff table, Validation report.
+The `site/` directory is disposable derived output — it can be rebuilt at any time and is not scanned by `acs validate` or `acs index`.
 
 ### Full syntax
 
@@ -316,8 +340,10 @@ acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
 acs handoff list [--task <TASK_ID>] [--role <ROLE>]
 acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
 acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
+acs log --task <TASK_ID> [--tail N] [--json]
 acs index
 acs doctor
+acs site build [--task <TASK_ID>]
 ```
 
 ## Aligned with Industry Handoff Standards

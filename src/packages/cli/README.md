@@ -259,6 +259,7 @@ Artifact storage is task-first in this version. Older type-first artifact paths 
 | `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             |
 | `acs package`        | Builds a role-specific context package for the next agent or automation step.                           |
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      |
+| `acs site build`     | Generates a zero-dependency static HTML dashboard under the store `site/` directory.                    |
 
 `acs package` includes a context budget advisory in Markdown and JSON output.
 Use `--max-tokens <N>` to override the configured budget for one run. The CLI
@@ -286,8 +287,10 @@ acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
 acs handoff list [--task <TASK_ID>] [--role <ROLE>]
 acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
 acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
+acs log --task <TASK_ID> [--tail N] [--json]
 acs index
 acs doctor
+acs site build [--task <TASK_ID>]
 ```
 
 ### Command - install-skills

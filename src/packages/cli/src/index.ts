@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -9,6 +9,7 @@ import { select, checkbox, input, confirm } from "@inquirer/prompts";
 import {
   buildContextPackage,
   buildIndex,
+  buildSiteModel,
   checkHandoff,
   createArtifact,
   createHandoff,
@@ -315,6 +316,11 @@ async function main(argv: string[]): Promise<void> {
     console.log("Note: install-agent-config is deprecated. Use: acs install-skills --agent <cursor|claude|codex|all>");
     const result = await installSkills(rootDir, "all");
     printResult("Installed agent configuration", result);
+    return;
+  }
+
+  if (command === "site") {
+    await handleSite(rest);
     return;
   }
 
@@ -791,6 +797,7 @@ Usage:
   acs log --task <TASK_ID> [--tail N] [--json]
   acs index
   acs doctor
+  acs site build [--task <TASK_ID>]
 
 Validation strictness (--mode):
   strict   (default) Upstream artifacts are required; missing inputs are errors.
@@ -820,11 +827,267 @@ Examples:
   acs next --role sa --task DEMO-0001
   acs handoff create --from ba --to sa --task DEMO-0001
   acs package --task DEMO-0001 --role sa
+  acs site build                              # generate static site under .acs/site/
+  acs site build --task DEMO-0001            # site focused on a single task
 `);
 }
 
 function toPosix(value: string): string {
   return value.split(path.sep).join("/");
+}
+
+// ─── site build ──────────────────────────────────────────────────────────────
+
+async function handleSite(rest: string[]): Promise<void> {
+  const [action, ...tail] = rest;
+  if (action !== "build") {
+    throw new Error(`Unknown site action "${action ?? ""}". Expected "build". Usage: acs site build [--task <TASK_ID>]`);
+  }
+  const args = parseArgs(tail);
+  const taskFilter = getStringFlag(args, "task");
+  const model = await buildSiteModel(process.cwd(), taskFilter);
+  const { storeDir } = model.store;
+  const siteDir = path.join(storeDir, "site");
+
+  await mkdir(path.join(siteDir, "assets"), { recursive: true });
+  await mkdir(path.join(siteDir, "data"), { recursive: true });
+
+  // Write model.json
+  const modelJsonPath = path.join(siteDir, "data", "model.json");
+  await writeFileUtf8(modelJsonPath, JSON.stringify(model, null, 2));
+
+  // Write site.css
+  const cssPath = path.join(siteDir, "assets", "site.css");
+  await writeFileUtf8(cssPath, buildSiteCss());
+
+  // Write site.js
+  const jsPath = path.join(siteDir, "assets", "site.js");
+  await writeFileUtf8(jsPath, buildSiteJs());
+
+  // Write index.html
+  const htmlPath = path.join(siteDir, "index.html");
+  await writeFileUtf8(htmlPath, buildSiteHtml());
+
+  console.log(`OK site build complete`);
+  console.log(`created ${toPosix(htmlPath)}`);
+  console.log(`created ${toPosix(path.join(siteDir, "data", "model.json"))}`);
+  console.log(`created ${toPosix(cssPath)}`);
+  console.log(`created ${toPosix(jsPath)}`);
+}
+
+async function writeFileUtf8(filePath: string, content: string): Promise<void> {
+  await writeFile(filePath, content, "utf8");
+}
+
+function buildSiteHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ACS Dashboard</title>
+  <link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+  <nav id="nav">
+    <a href="#" data-view="dashboard">Dashboard</a>
+    <a href="#" data-view="kanban">Kanban</a>
+    <a href="#" data-view="artifacts">Artifacts</a>
+    <a href="#" data-view="handoffs">Handoffs</a>
+    <a href="#" data-view="validation">Validation</a>
+  </nav>
+  <main id="main"></main>
+  <script src="assets/site.js"></script>
+</body>
+</html>
+`;
+}
+
+function buildSiteCss(): string {
+  return [
+    "/* ACS Static Site — zero-dependency styles */",
+    "*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }",
+    "body { font-family: system-ui, sans-serif; background: #f8f9fa; color: #212529; line-height: 1.5; }",
+    "nav { background: #343a40; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; }",
+    "nav a { color: #adb5bd; text-decoration: none; font-size: 0.9rem; }",
+    "nav a:hover, nav a.active { color: #fff; }",
+    "#main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }",
+    "h1 { font-size: 1.5rem; margin-bottom: 1rem; }",
+    "h2 { font-size: 1.2rem; margin: 1rem 0 0.5rem; }",
+    "h3 { font-size: 1rem; margin: 0.75rem 0 0.25rem; }",
+    ".cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }",
+    ".card { background: #fff; border-radius: 6px; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }",
+    ".card .value { font-size: 2rem; font-weight: bold; }",
+    ".card .label { font-size: 0.8rem; color: #6c757d; }",
+    ".kanban { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 1rem; }",
+    ".kanban-col { background: #e9ecef; border-radius: 6px; min-width: 160px; padding: 0.75rem; }",
+    ".kanban-col h3 { font-size: 0.85rem; color: #495057; margin-bottom: 0.5rem; }",
+    ".kanban-card { background: #fff; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.85rem; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.08); }",
+    ".kanban-card:hover { background: #f0f4ff; }",
+    "table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }",
+    "th, td { padding: 0.6rem 0.9rem; text-align: left; border-bottom: 1px solid #dee2e6; font-size: 0.88rem; }",
+    "th { background: #f1f3f5; font-weight: 600; }",
+    "tr:last-child td { border-bottom: none; }",
+    ".badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; }",
+    ".badge-ok { background: #d1e7dd; color: #0f5132; }",
+    ".badge-warn { background: #fff3cd; color: #664d03; }",
+    ".badge-error { background: #f8d7da; color: #842029; }",
+    ".badge-blocked { background: #f8d7da; color: #842029; }",
+    ".badge-done { background: #d1e7dd; color: #0f5132; }",
+    ".error-list { list-style: none; }",
+    ".error-list li { padding: 0.3rem 0; border-bottom: 1px solid #dee2e6; font-size: 0.85rem; }",
+    ".error-list li::before { content: '\\2716  '; color: #dc3545; }",
+    ".warn-list li::before { content: '\\26A0  '; color: #ffc107; }",
+    "pre { background: #f1f3f5; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.82rem; }",
+    "code { background: #f1f3f5; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.88em; }",
+    ""
+  ].join("\n");
+}
+
+function buildSiteJs(): string {
+  // Use string concatenation for the JS code to avoid backtick template literal conflicts.
+  // The JS regex patterns for fenced code blocks use triple-backtick which cannot be
+  // embedded in a TypeScript template literal.
+  const tripleBacktick = String.fromCharCode(96, 96, 96);
+  const singleBacktick = String.fromCharCode(96);
+  const lines: string[] = [
+    "/* ACS Static Site — zero-dependency JavaScript */",
+    "(function() {",
+    "  'use strict';",
+    "  var model = null;",
+    "  var currentView = 'dashboard';",
+    "  function escHtml(str) {",
+    "    return String(str)",
+    "      .replace(/&/g, '&amp;')",
+    "      .replace(/</g, '&lt;')",
+    "      .replace(/>/g, '&gt;')",
+    "      .replace(/\"/g, '&quot;')",
+    "      .replace(/'/g, '&#39;');",
+    "  }",
+    "  function renderMarkdown(src) {",
+    "    var lines = String(src).split(/\\r?\\n/);",
+    "    var out = [];",
+    "    var inCode = false;",
+    "    var codeLang = '';",
+    "    var codeLines = [];",
+    "    var inList = false;",
+    "    function flushList() { if (inList) { out.push('</ul>'); inList = false; } }",
+    "    var FENCE = " + JSON.stringify(tripleBacktick) + ";",
+    "    for (var i = 0; i < lines.length; i++) {",
+    "      var line = lines[i];",
+    "      if (!inCode && line.slice(0,3) === FENCE) {",
+    "        flushList(); inCode = true; codeLang = escHtml(line.slice(3).trim()); codeLines = []; continue;",
+    "      }",
+    "      if (inCode) {",
+    "        if (line.slice(0,3) === FENCE) {",
+    "          out.push('<pre><code' + (codeLang ? ' class=\"lang-' + codeLang + '\"' : '') + '>' + codeLines.map(function(l){ return escHtml(l); }).join('\\n') + '</code></pre>');",
+    "          inCode = false; codeLines = []; codeLang = '';",
+    "        } else { codeLines.push(line); }",
+    "        continue;",
+    "      }",
+    "      var hMatch = line.match(/^(#{1,6})\\s+(.*)/);",
+    "      if (hMatch) { flushList(); var level = hMatch[1].length; out.push('<h' + level + '>' + escHtml(hMatch[2]) + '</h' + level + '>'); continue; }",
+    "      if (/^[-*]\\s/.test(line)) { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + renderInline(line.slice(2)) + '</li>'); continue; }",
+    "      if (line.trim() === '') { flushList(); continue; }",
+    "      flushList(); out.push('<p>' + renderInline(line) + '</p>');",
+    "    }",
+    "    flushList();",
+    "    return out.join('\\n');",
+    "  }",
+    "  function renderInline(text) {",
+    "    var BT = " + JSON.stringify(singleBacktick) + ";",
+    "    var re1 = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');",
+    "    return escHtml(text)",
+    "      .replace(re1, '<code>$1</code>')",
+    "      .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_, label, href) {",
+    "        var safeHref = href.replace(/[^a-zA-Z0-9_.\\-/:?&#=@%+]/g, '');",
+    "        return '<a href=\"' + safeHref + '\">' + label + '</a>';",
+    "      });",
+    "  }",
+    "  function badge(text, cls) { return '<span class=\"badge badge-' + escHtml(cls) + '\">' + escHtml(text) + '</span>'; }",
+    "  function renderDashboard() {",
+    "    var v = model.validation;",
+    "    var validBadge = v.valid ? badge('valid', 'ok') : badge('invalid', 'error');",
+    "    return '<h1>ACS Dashboard</h1>' +",
+    "      '<div class=\"cards\">' +",
+    "      '<div class=\"card\"><div class=\"value\">' + escHtml(String(model.tasks.length)) + '</div><div class=\"label\">Tasks</div></div>' +",
+    "      '<div class=\"card\"><div class=\"value\">' + escHtml(String(model.artifacts.length)) + '</div><div class=\"label\">Artifacts</div></div>' +",
+    "      '<div class=\"card\"><div class=\"value\">' + escHtml(String(model.handoffs.length)) + '</div><div class=\"label\">Handoffs</div></div>' +",
+    "      '<div class=\"card\"><div class=\"value\">' + validBadge + '</div><div class=\"label\">Validation</div></div>' +",
+    "      '</div>' +",
+    "      '<p><strong>Store:</strong> ' + escHtml(model.store.storeDir) + '</p>' +",
+    "      '<p><strong>Mode:</strong> ' + escHtml(model.store.mode) + '</p>' +",
+    "      '<p><strong>Generated:</strong> ' + escHtml(model.generatedAt) + '</p>';",
+    "  }",
+    "  var kanbanOrder = ['Entry', 'BA', 'SA', 'DEV', 'QA', 'Review', 'Blocked', 'Done'];",
+    "  function renderKanban() {",
+    "    var cols = {};",
+    "    kanbanOrder.forEach(function(s) { cols[s] = []; });",
+    "    model.tasks.forEach(function(t) { var s = t.kanbanState || 'Entry'; if (!cols[s]) cols[s] = []; cols[s].push(t); });",
+    "    var html = '<h1>Kanban Board</h1><div class=\"kanban\">';",
+    "    kanbanOrder.forEach(function(state) {",
+    "      html += '<div class=\"kanban-col\"><h3>' + escHtml(state) + ' (' + cols[state].length + ')</h3>';",
+    "      cols[state].forEach(function(t) {",
+    "        html += '<div class=\"kanban-card\" onclick=\"showTaskDetail(' + escHtml(JSON.stringify(t.taskId)) + ')\">' + escHtml(t.taskId) + '<br><small>' + escHtml(String(t.artifactCount)) + ' artifacts</small></div>';",
+    "      });",
+    "      html += '</div>';",
+    "    });",
+    "    html += '</div>'; return html;",
+    "  }",
+    "  function renderArtifacts() {",
+    "    var html = '<h1>Artifacts</h1><table><thead><tr><th>ID</th><th>Type</th><th>Task</th><th>Status</th><th>Approval</th></tr></thead><tbody>';",
+    "    model.artifacts.forEach(function(a) { html += '<tr><td>' + escHtml(a.id) + '</td><td>' + escHtml(a.type) + '</td><td>' + escHtml(a.taskId) + '</td><td>' + escHtml(a.status) + '</td><td>' + escHtml(a.approvalStatus) + '</td></tr>'; });",
+    "    html += '</tbody></table>'; return html;",
+    "  }",
+    "  function renderHandoffs() {",
+    "    var html = '<h1>Handoffs</h1><table><thead><tr><th>ID</th><th>Task</th><th>From</th><th>To</th><th>Status</th><th>Approval</th></tr></thead><tbody>';",
+    "    model.handoffs.forEach(function(h) { html += '<tr><td>' + escHtml(h.id) + '</td><td>' + escHtml(h.taskId) + '</td><td>' + escHtml(h.fromRole) + '</td><td>' + escHtml(h.toRole) + '</td><td>' + escHtml(h.status) + '</td><td>' + escHtml(h.approvalStatus) + '</td></tr>'; });",
+    "    html += '</tbody></table>'; return html;",
+    "  }",
+    "  function renderValidation() {",
+    "    var v = model.validation;",
+    "    var html = '<h1>Validation</h1>';",
+    "    html += '<p>' + (v.valid ? badge('PASSED', 'ok') : badge('FAILED', 'error')) + '</p>';",
+    "    if (v.errors.length > 0) { html += '<h2>Errors (' + v.errors.length + ')</h2><ul class=\"error-list\">'; v.errors.forEach(function(e) { html += '<li>' + escHtml(e) + '</li>'; }); html += '</ul>'; }",
+    "    if (v.warnings.length > 0) { html += '<h2>Warnings (' + v.warnings.length + ')</h2><ul class=\"error-list warn-list\">'; v.warnings.forEach(function(w) { html += '<li>' + escHtml(w) + '</li>'; }); html += '</ul>'; }",
+    "    if (v.errors.length === 0 && v.warnings.length === 0) { html += '<p>No issues found.</p>'; }",
+    "    return html;",
+    "  }",
+    "  function showTaskDetail(taskId) {",
+    "    var t = model.tasks.find(function(x) { return x.taskId === taskId; });",
+    "    if (!t) return;",
+    "    var html = '<h1>Task: ' + escHtml(t.taskId) + '</h1>';",
+    "    html += '<p><strong>Kanban:</strong> ' + escHtml(t.kanbanState) + ' &nbsp; <strong>Next role:</strong> ' + escHtml(t.suggestedNextRole) + '</p>';",
+    "    html += '<h2>Artifacts (' + t.artifactCount + ')</h2>';",
+    "    if (t.artifacts.length > 0) { html += '<table><thead><tr><th>ID</th><th>Type</th><th>Status</th></tr></thead><tbody>'; t.artifacts.forEach(function(a) { html += '<tr><td>' + escHtml(a.id) + '</td><td>' + escHtml(a.type) + '</td><td>' + escHtml(a.status) + '</td></tr>'; }); html += '</tbody></table>'; }",
+    "    html += '<h2>Timeline (' + t.timeline.length + ' events)</h2>';",
+    "    if (t.timeline.length > 0) { html += '<ul>'; t.timeline.forEach(function(ev) { html += '<li>' + escHtml(ev.ts || '') + ' &mdash; ' + escHtml(ev.action) + '</li>'; }); html += '</ul>'; }",
+    "    html += '<p><a href=\"#\" onclick=\"navigate(\\'kanban\\'); return false;\">&larr; Back to Kanban</a></p>';",
+    "    document.getElementById('main').innerHTML = html;",
+    "  }",
+    "  window.showTaskDetail = showTaskDetail;",
+    "  function navigate(view) {",
+    "    currentView = view;",
+    "    document.querySelectorAll('nav a').forEach(function(a) { a.classList.toggle('active', a.dataset.view === view); });",
+    "    var main = document.getElementById('main');",
+    "    switch (view) {",
+    "      case 'dashboard': main.innerHTML = renderDashboard(); break;",
+    "      case 'kanban': main.innerHTML = renderKanban(); break;",
+    "      case 'artifacts': main.innerHTML = renderArtifacts(); break;",
+    "      case 'handoffs': main.innerHTML = renderHandoffs(); break;",
+    "      case 'validation': main.innerHTML = renderValidation(); break;",
+    "      default: main.innerHTML = '<p>Unknown view.</p>';",
+    "    }",
+    "  }",
+    "  window.navigate = navigate;",
+    "  document.querySelectorAll('nav a').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); navigate(a.dataset.view); }); });",
+    "  fetch('data/model.json')",
+    "    .then(function(r) { return r.json(); })",
+    "    .then(function(data) { model = data; navigate('dashboard'); })",
+    "    .catch(function(err) { document.getElementById('main').innerHTML = '<p style=\"color:red\">Failed to load model.json: ' + escHtml(String(err)) + '</p>'; });",
+    "})();"
+  ];
+  return lines.join("\n") + "\n";
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {

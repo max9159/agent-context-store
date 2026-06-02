@@ -618,3 +618,116 @@ describe("acs index", () => {
     assert.ok(exists(join(dir, ".acs/index.json")));
   });
 });
+
+// ─── acs site build ───────────────────────────────────────────────────────────
+
+describe("acs site build", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-cli-site-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "SITE-001", "--title", "Site SRS"], { cwd: dir });
+    runCli(["new", "srs", "--task", "SITE-002", "--title", "Other SRS"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("creates site/index.html under the store root", () => {
+    const r = runCli(["site", "build"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr} stdout: ${r.stdout}`);
+    assert.ok(exists(join(dir, ".acs/site/index.html")), "site/index.html should exist");
+  });
+
+  test("creates site/data/model.json", () => {
+    const r = runCli(["site", "build"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(dir, ".acs/site/data/model.json")), "site/data/model.json should exist");
+  });
+
+  test("creates site/assets/site.css", () => {
+    const r = runCli(["site", "build"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(dir, ".acs/site/assets/site.css")), "site/assets/site.css should exist");
+  });
+
+  test("creates site/assets/site.js", () => {
+    const r = runCli(["site", "build"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(exists(join(dir, ".acs/site/assets/site.js")), "site/assets/site.js should exist");
+  });
+
+  test("model.json has required top-level keys", async () => {
+    runCli(["site", "build"], { cwd: dir });
+    const content = await readFile(join(dir, ".acs/site/data/model.json"), "utf8");
+    const model = JSON.parse(content);
+    assert.ok(typeof model.generatedAt === "string", "model.generatedAt must be a string");
+    assert.ok(Array.isArray(model.tasks), "model.tasks must be an array");
+    assert.ok(Array.isArray(model.artifacts), "model.artifacts must be an array");
+    assert.ok(Array.isArray(model.handoffs), "model.handoffs must be an array");
+    assert.ok(typeof model.validation === "object" && model.validation !== null, "model.validation must be an object");
+    assert.ok(typeof model.store === "object" && model.store !== null, "model.store must be an object");
+  });
+
+  test("--task flag filters model.json to the specified task", async () => {
+    const r = runCli(["site", "build", "--task", "SITE-001"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const content = await readFile(join(dir, ".acs/site/data/model.json"), "utf8");
+    const model = JSON.parse(content);
+    const taskIds = model.tasks.map((t: { taskId: string }) => t.taskId);
+    assert.ok(taskIds.includes("SITE-001"), "model.tasks should include SITE-001");
+    assert.ok(!taskIds.includes("SITE-002"), "model.tasks should not include SITE-002 when filtered");
+    const artifactTaskIds = new Set(model.artifacts.map((a: { taskId: string }) => a.taskId));
+    assert.ok(!artifactTaskIds.has("SITE-002"), "model.artifacts should not include SITE-002 when filtered");
+  });
+
+  test("output reports generated file paths", () => {
+    const r = runCli(["site", "build"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(r.stdout.includes("index.html") || r.stdout.includes("model.json"), `expected path in output; stdout: ${r.stdout}`);
+  });
+
+  test("help text mentions site build", () => {
+    const r = runCli(["--help"]);
+    assert.equal(r.status, 0);
+    assert.ok(r.stdout.includes("site build"), `expected "site build" in help; stdout: ${r.stdout}`);
+  });
+});
+
+// ─── existing commands unaffected after site build ────────────────────────────
+
+describe("existing commands unaffected by site build", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-cli-site-compat-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "COMPAT-001", "--title", "Compat SRS"], { cwd: dir });
+    runCli(["site", "build"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("acs index works after site build", () => {
+    const r = runCli(["index"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+  });
+
+  test("acs validate works after site build", () => {
+    const r = runCli(["validate"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+  });
+
+  test("acs status works after site build", () => {
+    const r = runCli(["status"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+  });
+
+  test("site/ directory is not scanned by acs index", async () => {
+    const r = runCli(["index"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    const indexContent = await readFile(join(dir, ".acs/index.json"), "utf8");
+    const index = JSON.parse(indexContent);
+    for (const artifact of index.artifacts) {
+      assert.ok(!(artifact.path as string).includes("site/"), `index should not include site/ artifact: ${artifact.path as string}`);
+    }
+  });
+});
