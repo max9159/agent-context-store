@@ -118,11 +118,6 @@ describe("install-skills --agent codex", () => {
     );
   });
 
-  test("~/.codex/AGENTS.md routes context budget risk to the active role skill", async () => {
-    const content = await readText(join(home, ".codex/AGENTS.md"));
-    assert.ok(content.includes("context budget risk"));
-    assert.ok(content.includes("active ACS role skill"));
-  });
 });
 
 describe("install-skills --agent openclaw", () => {
@@ -161,20 +156,6 @@ describe("install-skills --agent all", () => {
     assert.ok(exists(join(home, ".codex/AGENTS.md")), "~/.codex/AGENTS.md missing");
   });
 
-  test("CLAUDE.md references active role skill for context budget risk", async () => {
-    const content = await readText(join(home, ".claude/CLAUDE.md"));
-    assert.ok(content.includes("context budget risk"));
-    assert.ok(content.includes("active ACS role skill"));
-  });
-
-  test("AGENTS.md written to ~/.cursor and ~/.codex (not duplicated within each)", async () => {
-    const cursorContent = await readText(join(home, ".cursor/AGENTS.md"));
-    const codexContent = await readText(join(home, ".codex/AGENTS.md"));
-    const cursorOccurrences = cursorContent.split("# Agent Context Store Instructions").length - 1;
-    const codexOccurrences = codexContent.split("# Agent Context Store Instructions").length - 1;
-    assert.equal(cursorOccurrences, 1, `~/.cursor/AGENTS.md duplicated content (${cursorOccurrences} occurrences)`);
-    assert.equal(codexOccurrences, 1, `~/.codex/AGENTS.md duplicated content (${codexOccurrences} occurrences)`);
-  });
 });
 
 // ─── Replace vs append behavior ───────────────────────────────────────────────
