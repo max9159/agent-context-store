@@ -869,4 +869,29 @@ describe("deriveKanbanState", () => {
     const state = deriveKanbanState({ rolesWithArtifacts: [], validationErrors: ["Store missing dir"], hasApprovedQaSignoff: false });
     assert.equal(state, "Blocked");
   });
+
+  test("returns Review when a handoff has pending approval and no errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: [], hasApprovedQaSignoff: false, hasPendingHandoff: true });
+    assert.equal(state, "Review");
+  });
+
+  test("Blocked takes precedence over Review", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: ["Some error"], hasApprovedQaSignoff: false, hasPendingHandoff: true });
+    assert.equal(state, "Blocked");
+  });
+
+  test("Done takes precedence over Review", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: true, hasPendingHandoff: true });
+    assert.equal(state, "Done");
+  });
+
+  test("Review takes precedence over role-stage", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: [], hasApprovedQaSignoff: false, hasPendingHandoff: true });
+    assert.equal(state, "Review");
+  });
+
+  test("hasPendingHandoff false or absent does not trigger Review", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "BA");
+  });
 });

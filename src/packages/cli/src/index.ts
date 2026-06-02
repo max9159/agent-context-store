@@ -846,6 +846,9 @@ async function handleSite(rest: string[]): Promise<void> {
   const args = parseArgs(tail);
   const taskFilter = getStringFlag(args, "task");
   const model = await buildSiteModel(process.cwd(), taskFilter);
+  if (taskFilter && model.tasks.length === 0) {
+    console.log(`notice no artifacts found for task "${taskFilter}" — site will be empty`);
+  }
   const { storeDir } = model.store;
   const siteDir = path.join(storeDir, "site");
 
@@ -970,8 +973,11 @@ function buildSiteJs(): string {
     "    var inCode = false;",
     "    var codeLang = '';",
     "    var codeLines = [];",
-    "    var inList = false;",
-    "    function flushList() { if (inList) { out.push('</ul>'); inList = false; } }",
+    "    var inUl = false;",
+    "    var inOl = false;",
+    "    function flushUl() { if (inUl) { out.push('</ul>'); inUl = false; } }",
+    "    function flushOl() { if (inOl) { out.push('</ol>'); inOl = false; } }",
+    "    function flushList() { flushUl(); flushOl(); }",
     "    var FENCE = " + JSON.stringify(tripleBacktick) + ";",
     "    for (var i = 0; i < lines.length; i++) {",
     "      var line = lines[i];",
@@ -987,7 +993,9 @@ function buildSiteJs(): string {
     "      }",
     "      var hMatch = line.match(/^(#{1,6})\\s+(.*)/);",
     "      if (hMatch) { flushList(); var level = hMatch[1].length; out.push('<h' + level + '>' + escHtml(hMatch[2]) + '</h' + level + '>'); continue; }",
-    "      if (/^[-*]\\s/.test(line)) { if (!inList) { out.push('<ul>'); inList = true; } out.push('<li>' + renderInline(line.slice(2)) + '</li>'); continue; }",
+    "      if (/^[-*]\\s/.test(line)) { flushOl(); if (!inUl) { out.push('<ul>'); inUl = true; } out.push('<li>' + renderInline(line.slice(2)) + '</li>'); continue; }",
+    "      var olMatch = line.match(/^\\d+\\.\\s+(.*)/);",
+    "      if (olMatch) { flushUl(); if (!inOl) { out.push('<ol>'); inOl = true; } out.push('<li>' + renderInline(olMatch[1]) + '</li>'); continue; }",
     "      if (line.trim() === '') { flushList(); continue; }",
     "      flushList(); out.push('<p>' + renderInline(line) + '</p>');",
     "    }",
@@ -997,10 +1005,17 @@ function buildSiteJs(): string {
     "  function renderInline(text) {",
     "    var BT = " + JSON.stringify(singleBacktick) + ";",
     "    var re1 = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');",
+    "    // escHtml is applied to the whole text first; label/href are already HTML-escaped.",
     "    return escHtml(text)",
     "      .replace(re1, '<code>$1</code>')",
     "      .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_, label, href) {",
+    "        var scheme = href.split(':')[0].toLowerCase();",
+    "        var isSafe = href.charAt(0) === '#' || href.charAt(0) === '/' || href.charAt(0) === '.' ||",
+    "          scheme === 'https' || scheme === 'http' || scheme === 'mailto';",
+    "        // Unsafe scheme: degrade to plain label text (already HTML-escaped)",
+    "        if (!isSafe) { return label; }",
     "        var safeHref = href.replace(/[^a-zA-Z0-9_.\\-/:?&#=@%+]/g, '');",
+    "        // label is already HTML-escaped from the initial escHtml call",
     "        return '<a href=\"' + safeHref + '\">' + label + '</a>';",
     "      });",
     "  }",
@@ -1088,6 +1103,84 @@ function buildSiteJs(): string {
     "})();"
   ];
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Returns a JavaScript source string that, when evaluated with `new Function`,
+ * returns an object `{ renderMarkdown, renderInline }`.
+ * Intended for unit-testing the Markdown renderer without a browser.
+ *
+ * @example
+ *   const src = buildRendererJs();
+ *   const { renderMarkdown, renderInline } = new Function(src)();
+ */
+export function buildRendererJs(): string {
+  const tripleBacktick = String.fromCharCode(96, 96, 96);
+  const singleBacktick = String.fromCharCode(96);
+  const lines: string[] = [
+    "function escHtml(str) {",
+    "  return String(str)",
+    "    .replace(/&/g, '&amp;')",
+    "    .replace(/</g, '&lt;')",
+    "    .replace(/>/g, '&gt;')",
+    "    .replace(/\"/g, '&quot;')",
+    "    .replace(/'/g, '&#39;');",
+    "}",
+    "function renderMarkdown(src) {",
+    "  var lines = String(src).split(/\\r?\\n/);",
+    "  var out = [];",
+    "  var inCode = false;",
+    "  var codeLang = '';",
+    "  var codeLines = [];",
+    "  var inUl = false;",
+    "  var inOl = false;",
+    "  function flushUl() { if (inUl) { out.push('</ul>'); inUl = false; } }",
+    "  function flushOl() { if (inOl) { out.push('</ol>'); inOl = false; } }",
+    "  function flushList() { flushUl(); flushOl(); }",
+    "  var FENCE = " + JSON.stringify(tripleBacktick) + ";",
+    "  for (var i = 0; i < lines.length; i++) {",
+    "    var line = lines[i];",
+    "    if (!inCode && line.slice(0,3) === FENCE) {",
+    "      flushList(); inCode = true; codeLang = escHtml(line.slice(3).trim()); codeLines = []; continue;",
+    "    }",
+    "    if (inCode) {",
+    "      if (line.slice(0,3) === FENCE) {",
+    "        out.push('<pre><code' + (codeLang ? ' class=\"lang-' + codeLang + '\"' : '') + '>' + codeLines.map(function(l){ return escHtml(l); }).join('\\n') + '</code></pre>');",
+    "        inCode = false; codeLines = []; codeLang = '';",
+    "      } else { codeLines.push(line); }",
+    "      continue;",
+    "    }",
+    "    var hMatch = line.match(/^(#{1,6})\\s+(.*)/);",
+    "    if (hMatch) { flushList(); var level = hMatch[1].length; out.push('<h' + level + '>' + escHtml(hMatch[2]) + '</h' + level + '>'); continue; }",
+    "    if (/^[-*]\\s/.test(line)) { flushOl(); if (!inUl) { out.push('<ul>'); inUl = true; } out.push('<li>' + renderInline(line.slice(2)) + '</li>'); continue; }",
+    "    var olMatch = line.match(/^\\d+\\.\\s+(.*)/);",
+    "    if (olMatch) { flushUl(); if (!inOl) { out.push('<ol>'); inOl = true; } out.push('<li>' + renderInline(olMatch[1]) + '</li>'); continue; }",
+    "    if (line.trim() === '') { flushList(); continue; }",
+    "    flushList(); out.push('<p>' + renderInline(line) + '</p>');",
+    "  }",
+    "  flushList();",
+    "  return out.join('\\n');",
+    "}",
+    "function renderInline(text) {",
+    "  var BT = " + JSON.stringify(singleBacktick) + ";",
+    "  var re1 = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');",
+    "  // escHtml is applied to the whole text first; label/href are already HTML-escaped.",
+    "  return escHtml(text)",
+    "    .replace(re1, '<code>$1</code>')",
+    "    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_, label, href) {",
+    "      var scheme = href.split(':')[0].toLowerCase();",
+    "      var isSafe = href.charAt(0) === '#' || href.charAt(0) === '/' || href.charAt(0) === '.' ||",
+    "        scheme === 'https' || scheme === 'http' || scheme === 'mailto';",
+    "      // Unsafe scheme: degrade to plain label text (already HTML-escaped)",
+    "      if (!isSafe) { return label; }",
+    "      var safeHref = href.replace(/[^a-zA-Z0-9_.\\-/:?&#=@%+]/g, '');",
+    "      // label is already HTML-escaped from the initial escHtml call",
+    "      return '<a href=\"' + safeHref + '\">' + label + '</a>';",
+    "    });",
+    "}",
+    "return { renderMarkdown: renderMarkdown, renderInline: renderInline };"
+  ];
+  return lines.join("\n");
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {
