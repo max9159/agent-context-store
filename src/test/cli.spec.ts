@@ -839,3 +839,66 @@ describe("Markdown renderer (buildRendererJs)", () => {
     assert.ok(html.includes("&lt;evil&gt;"), `expected escaped label: ${html}`);
   });
 });
+
+// ─── acs handoff approve ──────────────────────────────────────────────────────
+
+describe("acs handoff approve", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-cli-approve-");
+    runCli(["init", dir]);
+    // Create an srs artifact so ba->sa strict validation passes
+    runCli(["new", "srs", "--task", "CLI-APPR-001", "--title", "CLI Approve SRS"], { cwd: dir });
+    runCli(["handoff", "create", "--from", "ba", "--to", "sa", "--task", "CLI-APPR-001"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("approve by id exits 0 and outputs Approved handoff", () => {
+    const r = runCli(["handoff", "approve", "HOFF-CLI-APPR-001-BA-SA"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+    assert.ok(r.stdout.includes("Approved handoff"), `stdout: ${r.stdout}`);
+  });
+
+  test("idempotent re-approve exits 0", () => {
+    // Already approved from previous test - should be no-op
+    const r = runCli(["handoff", "approve", "HOFF-CLI-APPR-001-BA-SA"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+  });
+});
+
+describe("acs handoff approve — reviewer from env", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-cli-approve-env-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "CLI-APPR-ENV", "--title", "Env SRS"], { cwd: dir });
+    runCli(["handoff", "create", "--from", "ba", "--to", "sa", "--task", "CLI-APPR-ENV"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("ACS_REVIEWER env var is used as reviewer when --reviewer not provided", async () => {
+    const r = runCli(["handoff", "approve", "HOFF-CLI-APPR-ENV-BA-SA"], {
+      cwd: dir,
+      env: { ...process.env, ACS_REVIEWER: "env-reviewer" }
+    });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    // Check YAML contains reviewer
+    const handoffPath = join(dir, ".acs", "handoffs", "CLI-APPR-ENV", "HOFF-CLI-APPR-ENV-BA-SA.yaml");
+    const content = await readFile(handoffPath, "utf8");
+    assert.ok(content.includes("reviewer: env-reviewer"), `Expected reviewer in YAML:\n${content}`);
+  });
+});
+
+describe("acs handoff unknown action", () => {
+  test("unknown handoff action error message contains 'approve'", () => {
+    const dir = makeTempDir("acs-cli-unknown-handoff-");
+    runCli(["init", dir]);
+    const r = runCli(["handoff", "unknown-action"], { cwd: dir });
+    assert.notEqual(r.status, 0);
+    const output = r.stderr + r.stdout;
+    assert.ok(output.includes("approve"), `Error message should mention 'approve': ${output}`);
+    cleanupTempDir(dir);
+  });
+});

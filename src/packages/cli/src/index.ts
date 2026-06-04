@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { select, checkbox, input, confirm } from "@inquirer/prompts";
 import {
+  approveHandoff,
   buildContextPackage,
   buildIndex,
   buildSiteModel,
@@ -620,7 +621,28 @@ async function handleHandoff(rest: string[]): Promise<void> {
     return;
   }
 
-  throw new Error('Unknown handoff action. Expected "create", "check", or "list".');
+  if (action === "approve") {
+    const args = parseArgs(tail);
+    const mode = getAcsMode(args);
+    const reviewer = getStringFlag(args, "reviewer") ?? process.env["ACS_REVIEWER"] ?? undefined;
+    const fromRole = getStringFlag(args, "from");
+    const toRole = getStringFlag(args, "to");
+    const taskId = getStringFlag(args, "task");
+    const handoffRef = args.positional[0] ?? getStringFlag(args, "id");
+    const result = await approveHandoff({
+      rootDir: process.cwd(),
+      handoffRef,
+      fromRole,
+      toRole,
+      taskId,
+      reviewer,
+      mode
+    });
+    printResult(`Approved handoff ${result.handoffId}`, result);
+    return;
+  }
+
+  throw new Error('Unknown handoff action. Expected "create", "check", "list", or "approve".');
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -792,6 +814,8 @@ Usage:
   acs handoff check <HANDOFF_ID_OR_PATH>
   acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID> [--mode strict|relaxed]
   acs handoff list [--task <TASK_ID>] [--role <ROLE>]
+  acs handoff approve <HANDOFF_ID_OR_PATH> [--reviewer <NAME>] [--mode strict|relaxed]
+  acs handoff approve --from <ROLE> --to <ROLE> --task <TASK_ID> [--reviewer <NAME>] [--mode strict|relaxed]
   acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
   acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
   acs log --task <TASK_ID> [--tail N] [--json]

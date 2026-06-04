@@ -232,6 +232,19 @@ export interface ListHandoffsOptions {
   role?: string;
 }
 
+export interface ApproveHandoffOptions {
+  rootDir: string;
+  /** Handoff id or path (mutually exclusive with fromRole/toRole/taskId). */
+  handoffRef?: string;
+  fromRole?: string;
+  toRole?: string;
+  taskId?: string;
+  reviewer?: string;
+  /** ISO string; omit to use new Date().toISOString(). Inject for deterministic tests. */
+  reviewedAt?: string;
+  mode?: AcsMode;
+}
+
 export interface ValidateScopeOptions {
   rootDir: string;
   role?: string;
@@ -1197,6 +1210,116 @@ export async function listHandoffs(options: ListHandoffsOptions): Promise<string
     .map((file) => toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, file))));
 }
 
+/**
+ * Set (or append) a top-level scalar key in a YAML string without re-serializing
+ * the entire document. Only operates on zero-indented top-level keys (^key:),
+ * so nested keys like readiness.dor_status are never affected.
+ * - If the key already exists: replaces the first matching top-level line.
+ * - If the key does not exist: appends "key: value" at the end.
+ */
+function setYamlScalarLine(content: string, key: string, value: string): string {
+  // Escape regex metacharacters in key so callers with special-char keys don't corrupt the pattern.
+  // All current callers (approval_status, status, reviewed_at, reviewer) are safe, but this is defensive.
+  const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^(${safeKey}):[ \\t]*.*$`, "m");
+  const replacement = `$1: ${value}`;
+  if (pattern.test(content)) {
+    return content.replace(pattern, replacement);
+  }
+  // Append — ensure content ends with a newline before appending
+  const base = content.endsWith("\n") ? content : content + "\n";
+  return `${base}${key}: ${value}\n`;
+}
+
+export async function approveHandoff(
+  options: ApproveHandoffOptions
+): Promise<AcsResult & { handoffPath: string; handoffId: string; approvalStatus: "approved" }> {
+  const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
+
+  // Step 2: Resolve handoff reference
+  let resolvedRef: string;
+  if (options.handoffRef) {
+    resolvedRef = options.handoffRef;
+  } else {
+    if (!options.fromRole || !options.toRole || !options.taskId) {
+      throw new Error("Must provide handoffRef or all of fromRole, toRole, and taskId.");
+    }
+    const policy = await loadPolicy(options.rootDir);
+    const from = canonicalRole(policy, options.fromRole).toUpperCase();
+    const to = canonicalRole(policy, options.toRole).toUpperCase();
+    resolvedRef = `HOFF-${options.taskId}-${from}-${to}`;
+  }
+
+  const handoffPath = resolveHandoffPath(storeDir, projectDir, resolvedRef);
+  if (!handoffPath) {
+    throw new Error(`Handoff not found: ${resolvedRef}`);
+  }
+
+  // Step 3: Read + parse + idempotent short-circuit BEFORE strict validation
+  let content = await readFile(handoffPath, "utf8");
+  const parsed = parseYamlObject(content);
+  const currentApprovalStatus = parsed["approval_status"];
+  const yamlTaskId = typeof parsed["task_id"] === "string" ? parsed["task_id"] : undefined;
+  const handoffId = typeof parsed["id"] === "string" ? parsed["id"] : path.basename(handoffPath, ".yaml");
+  const resultPath = toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, handoffPath)));
+
+  if (currentApprovalStatus === "approved") {
+    return {
+      ...emptyResult(),
+      handoffPath: resultPath,
+      handoffId,
+      approvalStatus: "approved",
+      warnings: ["Handoff is already approved — no changes made."]
+    };
+  }
+
+  // Step 4: Strict validation (only for not-yet-approved handoffs)
+  const mode: AcsMode = options.mode ?? "strict";
+  const validation = await checkHandoff(options.rootDir, resolvedRef);
+  if (!validation.valid) {
+    if (mode === "strict") {
+      throw new Error(`Handoff validation failed:\n${validation.errors.join("\n")}`);
+    }
+    // relaxed: downgrade errors to warnings — still proceed
+  }
+
+  // Step 5: Compute reviewedAt and rewrite YAML
+  const reviewedAt = options.reviewedAt ?? new Date().toISOString();
+  content = setYamlScalarLine(content, "approval_status", "approved");
+  content = setYamlScalarLine(content, "status", "approved");
+  content = setYamlScalarLine(content, "reviewed_at", reviewedAt);
+  if (options.reviewer) {
+    content = setYamlScalarLine(content, "reviewer", options.reviewer);
+  }
+  await writeFile(handoffPath, content, "utf8");
+
+  // Step 6: Append audit
+  const taskIdForAudit = yamlTaskId ?? options.taskId;
+  await appendAudit(storeDir, {
+    action: "handoff.approve",
+    ts: reviewedAt,
+    from: typeof parsed["from_role"] === "string" ? parsed["from_role"] : options.fromRole,
+    to: typeof parsed["to_role"] === "string" ? parsed["to_role"] : options.toRole,
+    task_id: taskIdForAudit,
+    handoff: handoffId,
+    ...(options.reviewer ? { reviewer: options.reviewer } : {}),
+    reviewed_at: reviewedAt,
+    mode
+  });
+
+  // Step 7: Return
+  return {
+    ...emptyResult(),
+    handoffPath: resultPath,
+    handoffId,
+    approvalStatus: "approved",
+    updated: [resultPath],
+    ...(mode === "relaxed" && !validation.valid
+      ? { warnings: validation.errors.map((e) => `relaxed: ${e}`) }
+      : {})
+  };
+}
+
 export async function buildContextPackage(options: BuildContextPackageOptions): Promise<AcsResult & { packagePath: string }> {
   const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
   assertSafePathSegment(options.taskId, "task id");
@@ -1538,22 +1661,8 @@ export async function buildSiteModel(rootDirInput: string, taskFilter?: string):
       }
     }
 
-    // Determine suggested next role (mirrors getTasksOverview logic)
-    const stages = policy.workflow.stages;
-    let suggestedNextRole = stages[0]?.owner ?? "ba";
-    if (ownerSet.size === 0) {
-      suggestedNextRole = "any";
-    } else {
-      let lastIdx = -1;
-      stages.forEach((stage, idx) => {
-        if (ownerSet.has(stage.owner)) lastIdx = idx;
-      });
-      if (lastIdx >= 0 && lastIdx + 1 < stages.length) {
-        suggestedNextRole = stages[lastIdx + 1]!.owner;
-      } else if (lastIdx >= 0) {
-        suggestedNextRole = stages[lastIdx]!.owner;
-      }
-    }
+    // Determine suggested next role
+    const { suggestedNextRole } = computeNextRole(ownerSet, policy.workflow.stages);
 
     siteTasks.push({
       taskId,
@@ -2761,6 +2870,27 @@ export async function readTaskLog(options: ReadTaskLogOptions): Promise<AuditLog
   return events;
 }
 
+/**
+ * Compute the role that should act next for a task.
+ * Semantics: owner of the first stage whose owner has NO artifacts yet.
+ * Correctly handles a role owning multiple non-contiguous stages.
+ */
+export function computeNextRole(
+  ownerSet: ReadonlySet<string>,
+  stages: ReadonlyArray<{ owner: string }>
+): { suggestedNextRole: string; isEntry: boolean } {
+  if (ownerSet.size === 0) {
+    return { suggestedNextRole: "any", isEntry: true };
+  }
+  for (const stage of stages) {
+    if (!ownerSet.has(stage.owner)) {
+      return { suggestedNextRole: stage.owner, isEntry: false };
+    }
+  }
+  const last = stages[stages.length - 1];
+  return { suggestedNextRole: last?.owner ?? "ba", isEntry: false };
+}
+
 export async function getTasksOverview(rootDirInput: string): Promise<TaskOverview[]> {
   const { projectDir, storeDir } = resolveStoreContext(rootDirInput);
   const policy = await loadPolicy(rootDirInput);
@@ -2787,23 +2917,7 @@ export async function getTasksOverview(rootDirInput: string): Promise<TaskOvervi
         owners.add(def.owner);
       }
     }
-    let suggestedNextRole = stages[0]?.owner ?? "ba";
-    let isEntry = false;
-    if (owners.size === 0) {
-      suggestedNextRole = "any";
-      isEntry = true;
-    } else {
-      // Find the latest stage whose owner has artifacts and pick its next stage.
-      let lastIdx = -1;
-      stages.forEach((stage, idx) => {
-        if (owners.has(stage.owner)) lastIdx = idx;
-      });
-      if (lastIdx >= 0 && lastIdx + 1 < stages.length) {
-        suggestedNextRole = stages[lastIdx + 1]!.owner;
-      } else if (lastIdx >= 0) {
-        suggestedNextRole = stages[lastIdx]!.owner;
-      }
-    }
+    const { suggestedNextRole, isEntry } = computeNextRole(owners, stages);
     result.push({
       taskId,
       rolesWithArtifacts: [...owners],
