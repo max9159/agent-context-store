@@ -117,7 +117,7 @@ export interface StoreInfo {
 
 // ─── Static site model types ─────────────────────────────────────────────────
 
-export type KanbanState = "Entry" | "BA" | "SA" | "DEV" | "QA" | "Review" | "Blocked" | "Done";
+export type KanbanState = "Entry" | "BA" | "SA" | "DEV" | "QA" | "Blocked" | "Done";
 
 export interface SiteHandoff {
   id: string;
@@ -136,6 +136,10 @@ export interface SiteTask {
   handoffCount: number;
   suggestedNextRole: string;
   kanbanState: KanbanState;
+  /** "pending" when a handoff awaits approval; surfaced as a card badge, not a column. */
+  reviewStatus: "pending" | "none";
+  /** Target role of the pending handoff, used to label the badge (e.g. "Pending SA"). */
+  pendingToRole?: string;
   validationState: "valid" | "blocked" | "unknown";
   artifacts: ArtifactRecord[];
   handoffs: SiteHandoff[];
@@ -156,8 +160,6 @@ export interface DeriveKanbanStateOptions {
   rolesWithArtifacts: string[];
   validationErrors: string[];
   hasApprovedQaSignoff: boolean;
-  /** True when any handoff for this task has a pending-approval status. */
-  hasPendingHandoff?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1531,12 +1533,15 @@ export async function doctor(rootDirInput: string): Promise<ValidationResult> {
  * Rules (applied in precedence order):
  * 1. Blocked — any validation errors exist (overrides all other states)
  * 2. Done    — QA has artifacts AND has approved signoff AND no errors
- * 3. Review  — any handoff has a pending-approval status (artifacts ready for review)
- * 4. Role stage based on the highest role that has artifacts
- * 5. Entry   — no roles have artifacts
+ * 3. Role stage based on the highest role that has artifacts
+ * 4. Entry   — no roles have artifacts
+ *
+ * Note: handoff approval status (pending/approved) is surfaced as a per-card
+ * badge (see SiteTask.reviewStatus), not as a Kanban column, so a task under
+ * review still shows in the column of the role that owns its artifacts.
  */
 export function deriveKanbanState(options: DeriveKanbanStateOptions): KanbanState {
-  const { rolesWithArtifacts, validationErrors, hasApprovedQaSignoff, hasPendingHandoff } = options;
+  const { rolesWithArtifacts, validationErrors, hasApprovedQaSignoff } = options;
   const hasErrors = validationErrors.length > 0;
 
   // Blocked takes precedence over all other states when errors exist
@@ -1547,11 +1552,6 @@ export function deriveKanbanState(options: DeriveKanbanStateOptions): KanbanStat
   // Done: QA has artifacts and approved signoff and no errors
   if (rolesWithArtifacts.includes("qa") && hasApprovedQaSignoff) {
     return "Done";
-  }
-
-  // Review: a handoff exists with pending approval (artifacts ready for review)
-  if (hasPendingHandoff) {
-    return "Review";
   }
 
   // Role-stage precedence: last role in pipeline wins
@@ -1632,12 +1632,26 @@ export async function buildSiteModel(rootDirInput: string, taskFilter?: string):
       (a) => a.type === "qa-signoff" && a.approvalStatus === "approved"
     );
 
-    // Check for any pending-approval handoff for this task
-    const hasPendingHandoff = taskHandoffs.some(
+    // Check for any pending-approval handoff for this task. When multiple
+    // pending handoffs exist for one task, select the frontier: the one whose
+    // toRole is furthest along the pipeline (highest pipeline-order index).
+    // This is deterministic regardless of file/lexical order.
+    const pipelineOrder = ["ba", "sa", "dev", "qa"];
+    const pendingHandoffs = taskHandoffs.filter(
       (h) => h.approvalStatus === "pending" || h.approvalStatus === "pending_approval"
     );
+    const pendingHandoff = pendingHandoffs.length === 0
+      ? undefined
+      : pendingHandoffs.reduce((best, h) => {
+          const bestIdx = pipelineOrder.indexOf(best.toRole.toLowerCase());
+          const hIdx = pipelineOrder.indexOf(h.toRole.toLowerCase());
+          // Roles not in the list get index -1, which sorts last
+          return hIdx > bestIdx ? h : best;
+        });
+    const reviewStatus: "pending" | "none" = pendingHandoff ? "pending" : "none";
+    const pendingToRole = pendingHandoff?.toRole || undefined;
 
-    const kanbanState = deriveKanbanState({ rolesWithArtifacts, validationErrors: taskErrors, hasApprovedQaSignoff, hasPendingHandoff });
+    const kanbanState = deriveKanbanState({ rolesWithArtifacts, validationErrors: taskErrors, hasApprovedQaSignoff });
 
     // Timeline from audit log
     let timeline: AuditLogEvent[] = [];
@@ -1671,6 +1685,8 @@ export async function buildSiteModel(rootDirInput: string, taskFilter?: string):
       handoffCount: taskHandoffs.length,
       suggestedNextRole,
       kanbanState,
+      reviewStatus,
+      pendingToRole,
       validationState: taskErrors.length > 0 ? "blocked" : "valid",
       artifacts: taskArtifacts,
       handoffs: taskHandoffs,

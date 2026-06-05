@@ -75,7 +75,7 @@ The first implementation should deliver the following concrete features:
 | Static site build command | User runs `acs site build` and gets a generated static site under the ACS store `site/` directory. | Add CLI command parsing, core model call, and site file writing. | Resolved ACS store root from `resolveStoreContext()`. | CLI test verifies `site/index.html`, `site/assets/site.css`, `site/assets/site.js`, and `site/data/model.json` are created. |
 | Single-task site build | User runs `acs site build --task TASK-123` to generate a site model focused on one task. | Add optional task filter to CLI and site model generation. | Artifact frontmatter `task_id`, matching handoffs, matching audit log. | CLI/core tests verify unrelated tasks are excluded from `model.json`. |
 | Dashboard summary | Site landing view shows total tasks, artifacts, handoffs, validation state, and latest activity. | Static HTML/JS renders summary cards from `model.json`. | Site model, validation result, audit timeline. | Core test verifies model summary fields; CLI snapshot-style assertions verify generated model shape. |
-| Kanban task board | Site shows tasks grouped into `Entry`, `BA`, `SA`, `DEV`, `QA`, `Review`, `Blocked`, and `Done`. | Add derived Kanban state logic in core; render columns in static JS. | Workflow stages, artifact owners, handoff status, validation result. | Core tests cover representative state derivation, including blocked precedence. |
+| Kanban task board | Site shows tasks grouped into `Entry`, `BA`, `SA`, `DEV`, `QA`, `Blocked`, and `Done`. Tasks with a pending handoff approval remain in their role column and show a per-card "⏳ Pending &lt;ROLE&gt;" badge. | Add derived Kanban state logic in core; render columns in static JS. | Workflow stages, artifact owners, handoff status, validation result. | Core tests cover representative state derivation, including blocked precedence. |
 | Task detail view | User can select a task and see its artifacts, handoffs, timeline, validation messages, and suggested next role/actions. | Static JS view backed by task entries in `model.json`. | `getTasksOverview()`, `getNextActions()`, `readTaskLog()`, validation result. | Core test verifies task model includes artifacts, handoffs, timeline, and next actions. |
 | Artifact browser | Site lists artifacts with filters by task, type, owner, status, and approval status. | Static JS filtering over artifact records; links to rendered artifact detail. | `validateContextStore().artifacts` and artifact frontmatter. | Core test verifies artifact metadata is present; manual check verifies filters work. |
 | Artifact detail rendering | User can read artifact Markdown content inside the static site. | Add zero-dependency simplified Markdown renderer and safe HTML escaping. | Artifact Markdown files. | Unit tests verify headings, lists, code blocks, links, and HTML escaping. |
@@ -154,11 +154,12 @@ Recommended states:
 - `SA`: SA-owned artifacts exist and DEV/QA has not yet taken over.
 - `DEV`: DEV-owned artifacts exist and QA has not yet completed validation.
 - `QA`: QA-owned artifacts exist but final signoff is not approved.
-- `Review`: handoff exists with pending approval or artifacts are ready for review.
 - `Blocked`: validation errors, missing required handoff inputs, or changes requested.
 - `Done`: approved QA signoff or approved release readiness report.
 
 Blocked state should take precedence over role-stage state. Done should take precedence only when validation is still valid.
+
+Handoff approval status is not a separate column. A task awaiting handoff approval stays in its role column (the column of the role that owns its artifacts) and surfaces a per-card "Pending &lt;ROLE&gt;" badge. The `SiteTask.reviewStatus` field is `"pending"` when a handoff awaits approval, and `SiteTask.pendingToRole` identifies the target role.
 
 ## Static Site Pages
 

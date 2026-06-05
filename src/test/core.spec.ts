@@ -824,6 +824,39 @@ describe("buildSiteModel", () => {
     assert.ok(Array.isArray(model.validation.errors), "validation.errors should be an array");
     assert.ok(Array.isArray(model.validation.warnings), "validation.warnings should be an array");
   });
+
+  test("reviewStatus and pendingToRole reflect frontier pending handoff by pipeline role order", async () => {
+    // Isolated store so handoffs don't bleed into other tests
+    const hDir = makeTempDir("acs-core-site-review-");
+    try {
+      await initContextStore({ rootDir: hDir });
+      // Create BA artifact (srs) and SA artifact (sdd) so both roles have artifacts
+      await createArtifact({ rootDir: hDir, type: "srs", taskId: "SITE-HOF", title: "SITE-HOF SRS" });
+      await createArtifact({ rootDir: hDir, type: "sdd", taskId: "SITE-HOF", title: "SITE-HOF SDD" });
+      // Create a DEV artifact so the task sits in the DEV column
+      await createArtifact({ rootDir: hDir, type: "implementation-note", taskId: "SITE-HOF", title: "SITE-HOF Impl" });
+      // Handoff 1: BA→SA, approved — should NOT affect reviewStatus
+      const h1 = await createHandoff({ rootDir: hDir, fromRole: "ba", toRole: "sa", taskId: "SITE-HOF" });
+      await approveHandoff({ rootDir: hDir, handoffRef: h1.handoffId });
+      // Handoff 2: SA→DEV, pending (default) — lower pipeline frontier than DEV→QA
+      await createHandoff({ rootDir: hDir, fromRole: "sa", toRole: "dev", taskId: "SITE-HOF", mode: "relaxed" });
+      // Handoff 3: DEV→QA, pending — highest pipeline frontier (toRole = "qa", index 3)
+      await createHandoff({ rootDir: hDir, fromRole: "dev", toRole: "qa", taskId: "SITE-HOF", mode: "relaxed" });
+
+      const model = await buildSiteModel(hDir, "SITE-HOF");
+      const task = model.tasks.find((t: SiteTask) => t.taskId === "SITE-HOF");
+      assert.ok(task, "SITE-HOF task should exist");
+      // Task has DEV artifact so kanbanState should be DEV (not Review — Review column no longer exists)
+      assert.equal(task!.kanbanState, "DEV", "task should remain in DEV column, not a Review column");
+      // reviewStatus must be pending because there are pending handoffs
+      assert.equal(task!.reviewStatus, "pending", "reviewStatus should be pending");
+      // pendingToRole must be the furthest-along frontier: toRole "QA" (pipeline index 3) beats "DEV" (index 2)
+      // The YAML stores roles in uppercase (e.g. "QA"), so pendingToRole reflects that casing
+      assert.equal(task!.pendingToRole?.toUpperCase(), "QA", "pendingToRole should be the highest pipeline-order pending toRole");
+    } finally {
+      cleanupTempDir(hDir);
+    }
+  });
 });
 
 // ─── deriveKanbanState ────────────────────────────────────────────────────────
@@ -874,29 +907,20 @@ describe("deriveKanbanState", () => {
     assert.equal(state, "Blocked");
   });
 
-  test("returns Review when a handoff has pending approval and no errors", () => {
-    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: [], hasApprovedQaSignoff: false, hasPendingHandoff: true });
-    assert.equal(state, "Review");
+  test("a pending handoff no longer changes the stage (surfaced as a card badge instead)", () => {
+    // Previously this returned "Review"; now the task stays in its role column.
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "SA");
   });
 
-  test("Blocked takes precedence over Review", () => {
-    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: ["Some error"], hasApprovedQaSignoff: false, hasPendingHandoff: true });
+  test("Blocked still takes precedence regardless of handoff status", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: ["Some error"], hasApprovedQaSignoff: false });
     assert.equal(state, "Blocked");
   });
 
-  test("Done takes precedence over Review", () => {
-    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: true, hasPendingHandoff: true });
+  test("Done still takes precedence regardless of handoff status", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: true });
     assert.equal(state, "Done");
-  });
-
-  test("Review takes precedence over role-stage", () => {
-    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: [], hasApprovedQaSignoff: false, hasPendingHandoff: true });
-    assert.equal(state, "Review");
-  });
-
-  test("hasPendingHandoff false or absent does not trigger Review", () => {
-    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: [], hasApprovedQaSignoff: false });
-    assert.equal(state, "BA");
   });
 });
 
