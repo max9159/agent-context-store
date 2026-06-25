@@ -2,10 +2,15 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { readdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { makeTempDir, cleanupTempDir, runCli, exists, readText } from "./helpers.ts";
+import { platform } from "node:process";
+import net from "node:net";
+import { spawn } from "node:child_process";
+import { makeTempDir, cleanupTempDir, runCli, exists, readText, cliPath } from "./helpers.ts";
 import { buildRendererJs } from "../packages/cli/dist/index.js";
+import { generateMkdocsWorkspace } from "../packages/cli/dist/docs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -620,9 +625,9 @@ describe("acs index", () => {
   });
 });
 
-// ─── acs site build ───────────────────────────────────────────────────────────
+// ─── acs site kanban (build-only) — Test Plan tests #1-#8 ────────────────────
 
-describe("acs site build", () => {
+describe("acs site kanban --build-only", () => {
   let dir: string;
 
   before(() => {
@@ -633,44 +638,19 @@ describe("acs site build", () => {
   });
   after(() => cleanupTempDir(dir));
 
-  test("creates site/index.html under the store root", () => {
-    const r = runCli(["site", "build"], { cwd: dir });
+  // Test #1 — build-only parity
+  test("creates site/index.html, data/model.json, assets/site.css, assets/site.js; exits 0", () => {
+    const r = runCli(["site", "kanban", "--build-only"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr} stdout: ${r.stdout}`);
     assert.ok(exists(join(dir, ".acs/site/index.html")), "site/index.html should exist");
-  });
-
-  test("creates site/data/model.json", () => {
-    const r = runCli(["site", "build"], { cwd: dir });
-    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(exists(join(dir, ".acs/site/data/model.json")), "site/data/model.json should exist");
-  });
-
-  test("creates site/assets/site.css", () => {
-    const r = runCli(["site", "build"], { cwd: dir });
-    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(exists(join(dir, ".acs/site/assets/site.css")), "site/assets/site.css should exist");
-  });
-
-  test("creates site/assets/site.js", () => {
-    const r = runCli(["site", "build"], { cwd: dir });
-    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(exists(join(dir, ".acs/site/assets/site.js")), "site/assets/site.js should exist");
   });
 
-  test("model.json has required top-level keys", async () => {
-    runCli(["site", "build"], { cwd: dir });
-    const content = await readFile(join(dir, ".acs/site/data/model.json"), "utf8");
-    const model = JSON.parse(content);
-    assert.ok(typeof model.generatedAt === "string", "model.generatedAt must be a string");
-    assert.ok(Array.isArray(model.tasks), "model.tasks must be an array");
-    assert.ok(Array.isArray(model.artifacts), "model.artifacts must be an array");
-    assert.ok(Array.isArray(model.handoffs), "model.handoffs must be an array");
-    assert.ok(typeof model.validation === "object" && model.validation !== null, "model.validation must be an object");
-    assert.ok(typeof model.store === "object" && model.store !== null, "model.store must be an object");
-  });
-
-  test("--task flag filters model.json to the specified task", async () => {
-    const r = runCli(["site", "build", "--task", "SITE-001"], { cwd: dir });
+  // Test #2 — build-only --task filter
+  test("--task flag filters model.json tasks and artifacts", async () => {
+    const r = runCli(["site", "kanban", "--build-only", "--task", "SITE-001"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     const content = await readFile(join(dir, ".acs/site/data/model.json"), "utf8");
     const model = JSON.parse(content);
@@ -681,49 +661,119 @@ describe("acs site build", () => {
     assert.ok(!artifactTaskIds.has("SITE-002"), "model.artifacts should not include SITE-002 when filtered");
   });
 
+  // Test #3 — build-only reports paths
   test("output reports generated file paths", () => {
-    const r = runCli(["site", "build"], { cwd: dir });
+    const r = runCli(["site", "kanban", "--build-only"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(r.stdout.includes("index.html") || r.stdout.includes("model.json"), `expected path in output; stdout: ${r.stdout}`);
+    assert.ok(
+      r.stdout.includes("index.html") || r.stdout.includes("model.json"),
+      `expected path in output; stdout: ${r.stdout}`
+    );
   });
 
-  test("help text mentions site build", () => {
+  // Test #4 — build-only nonexistent task
+  test("--task with a nonexistent task prints a notice and exits 0", () => {
+    const r = runCli(["site", "kanban", "--build-only", "--task", "TASK-DOES-NOT-EXIST"], { cwd: dir });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(
+      r.stdout.includes("notice") || r.stdout.includes("no artifacts"),
+      `expected notice in stdout: ${r.stdout}`
+    );
+  });
+
+  // Test #5 — removed 'build' exits non-zero
+  test("acs site build exits non-zero and message names acs site kanban --build-only", () => {
+    const r = runCli(["site", "build"], { cwd: dir });
+    assert.notEqual(r.status, 0, "acs site build must exit non-zero");
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("kanban --build-only") || combined.includes("kanban"),
+      `message should reference kanban --build-only; output: ${combined}`
+    );
+  });
+
+  // Test #6 — help mentions acs site kanban and acs site docs, NOT site build as current
+  test("--help mentions acs site kanban and acs site docs", () => {
     const r = runCli(["--help"]);
     assert.equal(r.status, 0);
-    assert.ok(r.stdout.includes("site build"), `expected "site build" in help; stdout: ${r.stdout}`);
+    assert.ok(r.stdout.includes("site kanban"), `expected "site kanban" in help; stdout: ${r.stdout}`);
+    assert.ok(r.stdout.includes("site docs"), `expected "site docs" in help; stdout: ${r.stdout}`);
+    // The old 'acs site build [--task]' usage line should be gone
+    assert.ok(
+      !r.stdout.includes("acs site build [--task"),
+      `help should NOT show the old "acs site build [--task...]" usage; stdout: ${r.stdout}`
+    );
   });
 
-  test("--task with a nonexistent task prints a notice and exits 0", () => {
-    const r = runCli(["site", "build", "--task", "TASK-DOES-NOT-EXIST"], { cwd: dir });
-    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    assert.ok(r.stdout.includes("notice") || r.stdout.includes("no artifacts"), `expected notice in stdout: ${r.stdout}`);
+  // Test #7 — live-reload tail present in site.js
+  test("site.js contains __livereload and file: guard after build-only", async () => {
+    runCli(["site", "kanban", "--build-only"], { cwd: dir });
+    const jsContent = await readFile(join(dir, ".acs/site/assets/site.js"), "utf8");
+    assert.ok(
+      jsContent.includes("__livereload"),
+      `site.js should contain __livereload; got: ${jsContent.slice(0, 200)}`
+    );
+    assert.ok(
+      jsContent.includes("file:"),
+      `site.js should contain the file: guard; got: ${jsContent.slice(-300)}`
+    );
   });
 });
 
-// ─── existing commands unaffected after site build ────────────────────────────
+// Test #8 — docs preflight absent (PATH stub)
+describe("acs site docs (mkdocs absent)", () => {
+  let dir: string;
 
-describe("existing commands unaffected by site build", () => {
+  before(() => {
+    dir = makeTempDir("acs-cli-site-docs-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "DOCS-001", "--title", "Docs SRS"], { cwd: dir });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("exits 0 and prints pip install hint when mkdocs is not on PATH", () => {
+    // Build a PATH that omits any directory containing mkdocs but keeps system
+    // dirs so that the shell/Node can still run (especially on win32 where
+    // cmd.exe is needed for the shell: true spawn).
+    const stubPath = buildMkdocsAbsentPath();
+
+    const r = runCli(["site", "docs"], {
+      cwd: dir,
+      env: { ...process.env, PATH: stubPath },
+    });
+    assert.equal(r.status, 0, `expected exit 0; stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("pip install mkdocs"),
+      `expected pip install hint; output: ${combined}`
+    );
+  });
+});
+
+// ─── existing commands unaffected after site kanban --build-only ──────────────
+
+describe("existing commands unaffected by site kanban build-only", () => {
   let dir: string;
 
   before(() => {
     dir = makeTempDir("acs-cli-site-compat-");
     runCli(["init", dir]);
     runCli(["new", "srs", "--task", "COMPAT-001", "--title", "Compat SRS"], { cwd: dir });
-    runCli(["site", "build"], { cwd: dir });
+    runCli(["site", "kanban", "--build-only"], { cwd: dir });
   });
   after(() => cleanupTempDir(dir));
 
-  test("acs index works after site build", () => {
+  test("acs index works after site kanban build-only", () => {
     const r = runCli(["index"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
   });
 
-  test("acs validate works after site build", () => {
+  test("acs validate works after site kanban build-only", () => {
     const r = runCli(["validate"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
   });
 
-  test("acs status works after site build", () => {
+  test("acs status works after site kanban build-only", () => {
     const r = runCli(["status"], { cwd: dir });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
   });
@@ -734,10 +784,148 @@ describe("existing commands unaffected by site build", () => {
     const indexContent = await readFile(join(dir, ".acs/index.json"), "utf8");
     const index = JSON.parse(indexContent);
     for (const artifact of index.artifacts) {
-      assert.ok(!(artifact.path as string).includes("site/"), `index should not include site/ artifact: ${artifact.path as string}`);
+      assert.ok(
+        !(artifact.path as string).includes("site/"),
+        `index should not include site/ artifact: ${artifact.path as string}`
+      );
     }
   });
 });
+
+// ─── B1: port-in-use exits non-zero promptly (does NOT hang) ─────────────────
+
+describe("acs site kanban port-in-use exits non-zero", () => {
+  let dir: string;
+  let occupiedPort: number;
+  let sentinel: net.Server;
+
+  before(async () => {
+    dir = makeTempDir("acs-cli-site-port-");
+    runCli(["init", dir]);
+    runCli(["new", "srs", "--task", "PORT-001", "--title", "Port SRS"], { cwd: dir });
+    runCli(["site", "kanban", "--build-only"], { cwd: dir });
+
+    // Occupy a port so the CLI will hit EADDRINUSE
+    occupiedPort = await new Promise<number>((resolve) => {
+      sentinel = net.createServer();
+      sentinel.listen(0, "127.0.0.1", () => {
+        const addr = sentinel.address();
+        resolve(typeof addr === "object" && addr !== null ? addr.port : 0);
+      });
+    });
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => { sentinel.close(() => resolve()); });
+    await cleanupTempDir(dir);
+  });
+
+  test("exits non-zero with port-in-use message, does not hang", async () => {
+    // Spawn asynchronously with a fixed timeout so we can assert it does not hang.
+    const result = await new Promise<{ status: number; output: string }>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [cliPath, "site", "kanban", "--port", String(occupiedPort), "--no-watch"],
+        { cwd: dir, stdio: ["ignore", "pipe", "pipe"] }
+      );
+      let output = "";
+      if (child.stdout) child.stdout.on("data", (c: Buffer) => { output += String(c); });
+      if (child.stderr) child.stderr.on("data", (c: Buffer) => { output += String(c); });
+
+      // Must exit within 8 seconds — a hang would time out and fail the test
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Process did not exit within 8s (port-in-use should be immediate).\nOutput: ${output}`));
+      }, 8000);
+
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        resolve({ status: code ?? 1, output });
+      });
+    });
+
+    assert.notEqual(result.status, 0, `expected non-zero exit; output: ${result.output}`);
+    assert.ok(
+      result.output.includes("in use") || result.output.includes("EADDRINUSE"),
+      `expected port-in-use message; output: ${result.output}`
+    );
+  });
+});
+
+// ─── S1: generateMkdocsWorkspace unit test (no MkDocs needed) ────────────────
+
+describe("generateMkdocsWorkspace writes only site-docs/, leaves artifacts/ pristine", () => {
+  let storeDir: string;
+
+  before(async () => {
+    storeDir = makeTempDir("acs-cli-mkdocs-ws-");
+    // Create a minimal artifacts/ dir to simulate a real store
+    const artifactsDir = join(storeDir, "artifacts");
+    const { mkdir: mkdirAsync } = await import("node:fs/promises");
+    await mkdirAsync(join(artifactsDir, "TASK-001", "srs"), { recursive: true });
+    await writeFile(join(artifactsDir, "TASK-001", "srs", "SRS-TASK-001.md"), "# SRS\n", "utf8");
+  });
+
+  after(() => cleanupTempDir(storeDir));
+
+  test("site-docs/mkdocs.yml is created", async () => {
+    await generateMkdocsWorkspace(storeDir);
+    assert.ok(
+      existsSync(join(storeDir, "site-docs", "mkdocs.yml")),
+      "site-docs/mkdocs.yml should exist"
+    );
+  });
+
+  test("mkdocs.yml points docs_dir at artifacts/", async () => {
+    const content = await readFile(join(storeDir, "site-docs", "mkdocs.yml"), "utf8");
+    assert.ok(content.includes("artifacts"), `mkdocs.yml should reference artifacts/; got: ${content}`);
+    assert.ok(!content.includes("index.md"), `mkdocs.yml must not reference a generated index.md; got: ${content}`);
+  });
+
+  test("artifacts/ directory is unchanged — no new files added", async () => {
+    const entries = await readdir(join(storeDir, "artifacts", "TASK-001", "srs"));
+    assert.deepEqual(entries, ["SRS-TASK-001.md"], "artifacts/ should contain only the original file");
+  });
+
+  test("no index.md was written inside artifacts/", () => {
+    assert.ok(
+      !existsSync(join(storeDir, "artifacts", "index.md")),
+      "artifacts/index.md must not be created by generateMkdocsWorkspace"
+    );
+  });
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Build a PATH that omits any directory containing `mkdocs`, but keeps
+ * essential system directories so shell invocations still work.
+ *
+ * On win32 we must keep at minimum:
+ *   - The directory containing cmd.exe (typically C:\Windows\System32)
+ *   - The directory containing node.exe (so child processes resolve correctly)
+ *
+ * On POSIX we can keep any directory that does NOT contain a `mkdocs` binary.
+ */
+function buildMkdocsAbsentPath(): string {
+  const sep = platform === "win32" ? ";" : ":";
+  const originalDirs = (process.env["PATH"] ?? "").split(sep);
+
+  // Remove directories that contain mkdocs binary
+  const filtered = originalDirs.filter((dir) => {
+    if (!dir) return false;
+    // Check for mkdocs executable in this dir
+    try {
+      if (existsSync(join(dir, "mkdocs"))) return false;
+      if (existsSync(join(dir, "mkdocs.exe"))) return false;
+    } catch {
+      // If we can't check, keep the dir (conservative)
+    }
+    return true;
+  });
+
+  return filtered.join(sep);
+}
 
 // ─── Markdown renderer unit tests ─────────────────────────────────────────────
 

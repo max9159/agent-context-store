@@ -172,7 +172,7 @@ The examples below follow a single feature task `DEMO-0001: Login with OTP` thro
   acs package --task DEMO-0001 --role sa
   acs index
   ```
-  
+
 </details>
 
 ```
@@ -218,7 +218,7 @@ The agent ends its response with a `[HANDOFF: SA → DEV | DEMO-0001]` prompt.
 
 <details>
   <summary>The `acs-dev` skill activates and the agent internally runs:</summary>
-  
+
   ```bash
   acs next --role dev --task DEMO-0001
   acs dev new implementation-note --task DEMO-0001
@@ -227,7 +227,7 @@ The agent ends its response with a `[HANDOFF: SA → DEV | DEMO-0001]` prompt.
   acs package --task DEMO-0001 --role qa
   acs index
   ```
-  
+
 </details>
 
 ```
@@ -264,8 +264,8 @@ All four role artifacts and handoff records are now persisted in the store.
 ## Context Store Layout
 
 - In **in-repo** mode the store root is `.acs/`; in **dedicated** mode it is the store repository root.
-- Role deliverables are written under `artifacts/{task_id}/{type}/` (for example `artifacts/DEMO-0001/srs/SRS-DEMO-0001.md`); 
-- Handoff records go to `handoffs/`; 
+- Role deliverables are written under `artifacts/{task_id}/{type}/` (for example `artifacts/DEMO-0001/srs/SRS-DEMO-0001.md`).
+- Handoff records go to `handoffs/`.
 - Context bundles for the next role go to `packages/`.
 
 For the full directory tree and file-by-file guide, see [ACS Context Store Full Content Guide](docs/ACS_CONTEXT_STORE_INTRO_en.md).
@@ -289,7 +289,9 @@ For the full directory tree and file-by-file guide, see [ACS Context Store Full 
 | `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             |
 | `acs package`        | Builds a role-specific context package for the next agent or automation step.                           |
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      |
-| `acs site build`     | Generates a zero-dependency static HTML dashboard under the store `site/` directory.                    |
+| `acs site kanban`    | Serve (or build) the built-in zero-dep Kanban/Dashboard SPA with live reload.                           |
+| `acs site docs`      | Serve the MkDocs Material docs site over your artifact Markdown (requires MkDocs).                      |
+| `acs site`           | Run both engines concurrently on separate ports; single Ctrl-C tears both down.                         |
 
 `acs package` includes a context budget advisory in Markdown and JSON output.
 Use `--max-tokens <N>` to override the configured budget for one run. The CLI
@@ -297,28 +299,78 @@ does not split or rewrite artifacts; role skills decide semantic phase documents
 when the advisory reports `warning`, `high`, or `split_recommended`.
 | `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              |
 
-### Static site dashboard
+### Hybrid site preview
+
+`acs site` provides two rendering engines you can run independently or together:
+
+**Engine A — Kanban (built-in, zero-dependency)**
 
 ```bash
-acs site build                    # build site under .acs/site/ (in-repo mode)
-acs site build --task DEMO-0001   # build site focused on a single task
+acs site kanban                              # serve at http://127.0.0.1:8000/ with live reload
+acs site kanban --build-only                 # generate static files under .acs/site/ and exit
+acs site kanban --build-only --task DEMO-0001 # site focused on a single task
+acs site kanban --port 9000 --no-watch       # custom port, no file-watching
 ```
 
-The generated site is written under the resolved ACS store root at `site/`:
+The Kanban engine writes under `site/` inside the resolved ACS store root:
 
 ```
 site/
   index.html
   assets/
     site.css
-    site.js
+    site.js     (includes live-reload EventSource, no-op under file://)
   data/
     model.json
 ```
 
-Open `site/index.html` in any browser. No web server or external dependencies required.
 Views: Dashboard, Kanban board, Artifact browser, Handoff table, Validation report.
-The `site/` directory is disposable derived output — it can be rebuilt at any time and is not scanned by `acs validate` or `acs index`.
+Live reload is driven by SSE at `/__livereload`; file-watching covers `artifacts/`, `handoffs/`, and `audit/`.
+
+> **Note:** `acs site build` has been removed. Use `acs site kanban --build-only` instead.
+
+**Engine B — Docs (MkDocs + Material, optional)**
+
+MkDocs is an optional user-installed Python tool. The engine degrades gracefully if it is absent.
+
+```bash
+# Install MkDocs (once)
+pip install mkdocs mkdocs-material
+
+acs site docs                    # serve at http://127.0.0.1:8001/
+acs site docs --build-only       # build static HTML output and exit
+```
+
+The docs engine writes only `site-docs/mkdocs.yml` under the store root.
+It **never writes anything under `artifacts/`** — doing so would break `acs validate`.
+
+**Concurrent mode**
+
+```bash
+acs site                         # run both engines, print both URLs, single Ctrl-C teardown
+acs site --kanban-port 8000 --docs-port 8001
+acs site --no-watch              # disable Kanban file-watching (MkDocs has its own reload)
+```
+
+**Flag defaults**
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--port` / `--kanban-port` | `8000` | Kanban engine port |
+| `--docs-port` | `8001` | Docs engine port |
+| `--host` | `127.0.0.1` | Loopback only |
+| `--no-watch` | off | Disable Kanban live reload (MkDocs reload unaffected) |
+| `--build-only` | off | Generate and exit; no server |
+| `--open` | off | Open browser after start |
+
+**Derived output**
+
+Both `site/` and `site-docs/` are disposable derived output. They are never scanned by `acs validate` or `acs index`. Recommended `.gitignore` entries for generated stores:
+
+```
+.acs/site/
+.acs/site-docs/
+```
 
 ### Full syntax
 
@@ -343,7 +395,9 @@ acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
 acs log --task <TASK_ID> [--tail N] [--json]
 acs index
 acs doctor
-acs site build [--task <TASK_ID>]
+acs site [--kanban-port <N>] [--docs-port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+acs site kanban [--build-only] [--port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+acs site docs [--build-only] [--port <N>] [--host <H>] [--open]
 ```
 
 ## Aligned with Industry Handoff Standards

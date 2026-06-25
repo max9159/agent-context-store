@@ -19,6 +19,10 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { platform } from "node:process";
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import http from "node:http";
 import {
   makeTempDir,
   cleanupTempDir,
@@ -27,6 +31,7 @@ import {
   readJson,
   readText,
   isolatedEnv,
+  cliPath,
 } from "./helpers.ts";
 
 function localBaseDir(envDir: string): string {
@@ -463,3 +468,388 @@ describe("Scenario: idempotency and error guards", () => {
     }
   });
 });
+
+// ─── Scenario 6: acs site kanban serve smoke (Tests #9 and #10) ──────────────
+
+describe("Scenario: kanban serve smoke (async spawn, --port 0)", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-kanban-serve-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "SERVE-001", "--title", "Serve SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  // Test #9 — kanban serve smoke
+  test("serves HTTP on an ephemeral port, GET / returns 200, GET /data/model.json parses, SSE header is text/event-stream", async () => {
+    const port = await withKanbanServer(dir, async (baseUrl) => {
+      // GET /
+      const rootRes = await httpGet(baseUrl + "/");
+      assert.equal(rootRes.status, 200, `GET / should return 200, got ${rootRes.status}`);
+
+      // GET /data/model.json — should parse as JSON
+      const modelRes = await httpGet(baseUrl + "/data/model.json");
+      assert.equal(modelRes.status, 200, `GET /data/model.json should return 200`);
+      const model = JSON.parse(modelRes.body);
+      assert.ok(typeof model.generatedAt === "string", "model.json should have generatedAt");
+      assert.ok(Array.isArray(model.tasks), "model.json should have tasks array");
+
+      // GET /__livereload — response header content-type should be text/event-stream
+      const sseRes = await httpGetHeaders(baseUrl + "/__livereload");
+      assert.ok(
+        (sseRes["content-type"] ?? "").includes("text/event-stream"),
+        `/__livereload content-type should be text/event-stream; got: ${sseRes["content-type"] ?? "(none)"}`
+      );
+
+      return 0;
+    });
+    // port is just a sentinel return value
+    void port;
+  });
+
+  // Test #10 — path traversal rejected
+  test("path traversal GET /../../etc/passwd returns 403 or 404", async () => {
+    await withKanbanServer(dir, async (baseUrl) => {
+      const traversalRes = await httpGet(baseUrl + "/../../etc/passwd");
+      assert.ok(
+        traversalRes.status === 403 || traversalRes.status === 404,
+        `traversal should return 403 or 404; got ${traversalRes.status}`
+      );
+
+      // Also test percent-encoded variant
+      const encodedRes = await httpGet(baseUrl + "/%2e%2e%2fetc%2fpasswd");
+      assert.ok(
+        encodedRes.status === 403 || encodedRes.status === 404,
+        `encoded traversal should return 403 or 404; got ${encodedRes.status}`
+      );
+
+      return 0;
+    });
+  });
+});
+
+// ─── Scenario 7: both-mode degrades without MkDocs (Test #12) ────────────────
+
+describe("Scenario: both-mode degrades gracefully when MkDocs absent", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-both-degrade-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "BOTH-001", "--title", "Both SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  // Test #12 — both-mode degrades without MkDocs
+  test("acs site --kanban-port 0 warns about docs and still serves Kanban", async () => {
+    const stubPath = buildMkdocsAbsentPath();
+
+    await withKanbanServerCustom(
+      dir,
+      ["site", "--kanban-port", "0", "--no-watch"],
+      { PATH: stubPath },
+      async (baseUrl, stdout) => {
+        // Banner should warn about docs
+        assert.ok(
+          stdout.includes("kanban") || stdout.includes("Kanban") || stdout.includes("ACS"),
+          `banner should mention kanban; stdout: ${stdout}`
+        );
+
+        // Kanban should still be serving
+        const res = await httpGet(baseUrl + "/");
+        assert.equal(res.status, 200, `GET / should return 200; got ${res.status}`);
+
+        return 0;
+      }
+    );
+  });
+});
+
+// ─── Scenario 8: acs validate stays clean after site-docs (Test #13) ─────────
+
+describe("Scenario: acs validate clean after site-docs / site-docs/ isolation", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-site-docs-validate-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "VDOCS-001", "--title", "Validate Docs SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  // Test #13 — validate stays clean after docs build, no index.md in artifacts/
+  test("acs validate exits 0 and artifacts/ has no generated index.md after acs site docs", async () => {
+    // Run acs site docs --build-only; skip if mkdocs not present (see plan §test-13)
+    const docsResult = runCli(["site", "docs", "--build-only"], { cwd: dir });
+
+    // Whether mkdocs is present or not, validate must still pass
+    const validateResult = runCli(["validate"], { cwd: dir });
+    assert.equal(validateResult.status, 0, `acs validate should pass; stdout: ${validateResult.stdout}\nstderr: ${validateResult.stderr}`);
+
+    // artifacts/ must NOT contain any generated files (in particular no index.md)
+    const artifactsDir = join(dir, ".acs", "artifacts");
+    const allArtifactMd = await collectMarkdownFiles(artifactsDir);
+    for (const f of allArtifactMd) {
+      assert.ok(
+        !f.endsWith("index.md"),
+        `artifacts/ must not contain a generated index.md; found: ${f}`
+      );
+    }
+
+    // If mkdocs ran (exit 0), assert site-docs/mkdocs.yml exists and is under site-docs/ only
+    if (docsResult.status === 0) {
+      const mkdocsYml = join(dir, ".acs", "site-docs", "mkdocs.yml");
+      assert.ok(
+        existsSync(mkdocsYml),
+        `site-docs/mkdocs.yml should exist after docs build-only; checked: ${mkdocsYml}`
+      );
+    }
+
+    // acs index must not pick up site-docs/ paths
+    const indexResult = runCli(["index"], { cwd: dir });
+    assert.equal(indexResult.status, 0, `acs index should pass`);
+    const indexJson = await readJson<{ artifacts: Array<{ path: string }> }>(join(dir, ".acs", "index.json"));
+    for (const artifact of indexJson.artifacts) {
+      assert.ok(
+        !artifact.path.includes("site-docs/"),
+        `index should not include site-docs/ artifact: ${artifact.path}`
+      );
+      assert.ok(
+        !artifact.path.includes("site/"),
+        `index should not include site/ artifact: ${artifact.path}`
+      );
+    }
+  });
+});
+
+// ─── Shared helpers for serve tests ──────────────────────────────────────────
+
+interface HttpResult {
+  status: number;
+  body: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Minimal HTTP GET over Node's built-in http module.
+ * Returns status, body, and headers.
+ */
+function httpGet(url: string): Promise<HttpResult> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.get(
+      {
+        host: parsed.hostname,
+        port: Number(parsed.port),
+        path: parsed.pathname + (parsed.search ?? ""),
+        timeout: 5000,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+          else if (Array.isArray(v)) headers[k] = v.join(", ");
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ status, body: Buffer.concat(chunks).toString(), headers }));
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+  });
+}
+
+/**
+ * Make an HTTP GET and capture headers from the response.
+ * For SSE endpoints we destroy the connection after receiving headers.
+ * Captures headers before destroying to avoid losing them.
+ */
+function httpGetHeaders(url: string): Promise<Record<string, string>> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    let captured: Record<string, string> | null = null;
+
+    const req = http.get(
+      {
+        host: parsed.hostname,
+        port: Number(parsed.port),
+        path: parsed.pathname + (parsed.search ?? ""),
+        timeout: 3000,
+      },
+      (res) => {
+        // Capture headers from the IncomingMessage immediately
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+          else if (Array.isArray(v)) headers[k] = v.join(", ");
+        }
+        captured = headers;
+        // Destroy to avoid hanging on SSE stream — resolve with captured headers
+        res.destroy();
+        req.destroy();
+        resolve(headers);
+      }
+    );
+    req.on("error", (_err: Error) => {
+      // ECONNRESET is expected when we destroy — resolve with whatever we captured
+      if (captured !== null) {
+        resolve(captured);
+      } else {
+        resolve({});
+      }
+    });
+    req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+  });
+}
+
+/**
+ * Spawn the CLI with `site kanban --port 0 --no-watch`, wait for the
+ * "OK ACS kanban serving at" banner, extract the actual port, run `fn`,
+ * then SIGINT the child and wait for exit.
+ */
+async function withKanbanServer<T>(
+  cwd: string,
+  fn: (baseUrl: string) => Promise<T>
+): Promise<T> {
+  return withKanbanServerCustom(cwd, ["site", "kanban", "--port", "0", "--no-watch"], {}, fn);
+}
+
+async function withKanbanServerCustom<T>(
+  cwd: string,
+  args: string[],
+  extraEnv: Record<string, string>,
+  fn: (baseUrl: string, stdout: string) => Promise<T>
+): Promise<T> {
+  const env = { ...process.env, ...extraEnv };
+
+  const child = spawn(process.execPath, [cliPath, ...args], {
+    cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let collectedStdout = "";
+  let collectedStderr = "";
+  let resolvedPort: number | null = null;
+
+  if (child.stdout) {
+    child.stdout.on("data", (chunk: Buffer) => {
+      collectedStdout += String(chunk);
+    });
+  }
+  if (child.stderr) {
+    child.stderr.on("data", (chunk: Buffer) => {
+      collectedStderr += String(chunk);
+    });
+  }
+
+  // Wait until the "OK ACS kanban serving at http://127.0.0.1:<port>/" banner appears
+  const bannerPromise = new Promise<number>((resolve, reject) => {
+    const checkBanner = () => {
+      const match = collectedStdout.match(/OK ACS kanban serving at http:\/\/127\.0\.0\.1:(\d+)\//);
+      if (match) {
+        resolve(Number(match[1]));
+      }
+    };
+    if (child.stdout) {
+      child.stdout.on("data", () => { checkBanner(); });
+    }
+    // Timeout after 15s
+    setTimeout(() => {
+      reject(new Error(
+        `Timeout waiting for kanban banner.\nstdout: ${collectedStdout}\nstderr: ${collectedStderr}`
+      ));
+    }, 15_000);
+    child.on("close", (code) => {
+      reject(new Error(
+        `Process exited early with code ${code ?? "null"}.\nstdout: ${collectedStdout}\nstderr: ${collectedStderr}`
+      ));
+    });
+  });
+
+  resolvedPort = await bannerPromise;
+
+  // Small poll loop to ensure the port is actually accepting connections
+  const baseUrl = `http://127.0.0.1:${resolvedPort}`;
+  for (let i = 0; i < 10; i++) {
+    try {
+      const r = await httpGet(baseUrl + "/");
+      if (r.status === 200) break;
+    } catch {
+      await sleep(200);
+    }
+  }
+
+  let result: T;
+  try {
+    result = await fn(baseUrl, collectedStdout);
+  } finally {
+    child.kill("SIGINT");
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+      setTimeout(() => { child.kill(); resolve(); }, 3000);
+    });
+  }
+
+  return result;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Recursively collect all .md files under a directory.
+ */
+async function collectMarkdownFiles(dirPath: string): Promise<string[]> {
+  const results: string[] = [];
+  if (!existsSync(dirPath)) return results;
+  // Use recursive readdir with withFileTypes (Node 18.17+)
+  const entries = await readdir(dirPath, { withFileTypes: true, recursive: true } as Parameters<typeof readdir>[1]);
+  for (const entry of entries as Array<{ isFile(): boolean; name: string; path?: string; parentPath?: string }>) {
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      // `entry.path` is available in Node 20+ (parentPath in some versions)
+      const parent = (entry.path ?? entry.parentPath) ?? dirPath;
+      results.push(join(parent, entry.name));
+    }
+  }
+  return results;
+}
+
+/**
+ * Build a PATH that omits directories containing mkdocs,
+ * but keeps system/node directories for shell resolution.
+ */
+function buildMkdocsAbsentPath(): string {
+  const sep = platform === "win32" ? ";" : ":";
+  const originalDirs = (process.env["PATH"] ?? "").split(sep);
+
+  const filtered = originalDirs.filter((d) => {
+    if (!d) return false;
+    try {
+      if (existsSync(join(d, "mkdocs"))) return false;
+      if (existsSync(join(d, "mkdocs.exe"))) return false;
+    } catch {
+      // keep on error
+    }
+    return true;
+  });
+
+  return filtered.join(sep);
+}

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, watch as fsWatch } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import http from "node:http";
+import { spawn } from "node:child_process";
+import type { ServerResponse } from "node:http";
 import { select, checkbox, input, confirm } from "@inquirer/prompts";
+import { mkdocsPreflight, generateMkdocsWorkspace, startMkdocsServe } from "./docs.js";
 import {
   approveHandoff,
   buildContextPackage,
@@ -683,6 +687,30 @@ function getStringFlag(args: ParsedArgs, name: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/**
+ * Returns true when the flag is present as boolean true or the string "true".
+ * Used for --build-only, --open, --no-watch, etc.
+ */
+function getBoolFlag(args: ParsedArgs, name: string): boolean {
+  const value = args.flags[name];
+  return value === true || value === "true";
+}
+
+/**
+ * Parse a port flag as a non-negative integer 0–65535.
+ * 0 is valid — it means "OS-assigned ephemeral port".
+ * Falls back to `fallback` when the flag is absent.
+ */
+function parsePortFlag(args: ParsedArgs, name: string, fallback: number): number {
+  const raw = getStringFlag(args, name);
+  if (raw === undefined) return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0 || n > 65535 || String(n) !== raw) {
+    throw new Error(`--${name} must be an integer between 0 and 65535, got "${raw}"`);
+  }
+  return n;
+}
+
 function printResult(title: string, result: { created: string[]; updated: string[]; warnings: string[] }): void {
   console.log(`OK ${title}`);
   for (const filePath of result.created) {
@@ -821,7 +849,12 @@ Usage:
   acs log --task <TASK_ID> [--tail N] [--json]
   acs index
   acs doctor
-  acs site build [--task <TASK_ID>]
+  acs site [--kanban-port <N>] [--docs-port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+  acs site kanban [--build-only] [--port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+  acs site docs [--build-only] [--port <N>] [--host <H>] [--open]
+
+Note: "acs site build" is removed. Use "acs site kanban --build-only" instead.
+Note: --no-watch affects only the Kanban engine; MkDocs has its own live-reload.
 
 Validation strictness (--mode):
   strict   (default) Upstream artifacts are required; missing inputs are errors.
@@ -851,8 +884,11 @@ Examples:
   acs next --role sa --task DEMO-0001
   acs handoff create --from ba --to sa --task DEMO-0001
   acs package --task DEMO-0001 --role sa
-  acs site build                              # generate static site under .acs/site/
-  acs site build --task DEMO-0001            # site focused on a single task
+  acs site kanban                             # serve workflow app at http://127.0.0.1:8000/
+  acs site kanban --build-only               # generate static site under .acs/site/ (no server)
+  acs site kanban --build-only --task DEMO-0001  # site focused on a single task
+  acs site docs                              # serve MkDocs Material docs at http://127.0.0.1:8001/
+  acs site                                   # run both engines concurrently on separate ports
 `);
 }
 
@@ -860,46 +896,442 @@ function toPosix(value: string): string {
   return value.split(path.sep).join("/");
 }
 
-// ─── site build ──────────────────────────────────────────────────────────────
+// ─── site ─────────────────────────────────────────────────────────────────────
 
 async function handleSite(rest: string[]): Promise<void> {
   const [action, ...tail] = rest;
-  if (action !== "build") {
-    throw new Error(`Unknown site action "${action ?? ""}". Expected "build". Usage: acs site build [--task <TASK_ID>]`);
+
+  // bare `acs site` or `acs site --open` / `acs site --kanban-port 9000` etc.
+  if (action === undefined || action.startsWith("--")) {
+    return handleSiteBoth(rest);
   }
-  const args = parseArgs(tail);
-  const taskFilter = getStringFlag(args, "task");
-  const model = await buildSiteModel(process.cwd(), taskFilter);
-  if (taskFilter && model.tasks.length === 0) {
-    console.log(`notice no artifacts found for task "${taskFilter}" — site will be empty`);
+
+  if (action === "kanban") return handleSiteKanban(tail);
+  if (action === "docs") {
+    const { handleSiteDocs } = await import("./docs.js");
+    return handleSiteDocs(tail);
   }
+
+  if (action === "build") {
+    throw new Error(
+      'The "acs site build" command has been removed. Use "acs site kanban --build-only" instead.'
+    );
+  }
+
+  throw new Error(
+    `Unknown site action "${action}". Expected "kanban", "docs", or no subcommand. ` +
+    'The old "acs site build" is now "acs site kanban --build-only".'
+  );
+}
+
+// ─── rebuildKanbanSite ────────────────────────────────────────────────────────
+
+interface KanbanBuildResult {
+  siteDir: string;
+  storeDir: string;
+  model: Awaited<ReturnType<typeof buildSiteModel>>;
+}
+
+async function rebuildKanbanSite(
+  cwd: string,
+  taskFilter?: string
+): Promise<KanbanBuildResult> {
+  const model = await buildSiteModel(cwd, taskFilter);
   const { storeDir } = model.store;
   const siteDir = path.join(storeDir, "site");
 
   await mkdir(path.join(siteDir, "assets"), { recursive: true });
   await mkdir(path.join(siteDir, "data"), { recursive: true });
 
-  // Write model.json
-  const modelJsonPath = path.join(siteDir, "data", "model.json");
-  await writeFileUtf8(modelJsonPath, JSON.stringify(model, null, 2));
+  await writeFileUtf8(path.join(siteDir, "data", "model.json"), JSON.stringify(model, null, 2));
+  await writeFileUtf8(path.join(siteDir, "assets", "site.css"), buildSiteCss());
+  await writeFileUtf8(path.join(siteDir, "assets", "site.js"), buildSiteJs());
+  await writeFileUtf8(path.join(siteDir, "index.html"), buildSiteHtml());
 
-  // Write site.css
-  const cssPath = path.join(siteDir, "assets", "site.css");
-  await writeFileUtf8(cssPath, buildSiteCss());
+  return { siteDir, storeDir, model };
+}
 
-  // Write site.js
-  const jsPath = path.join(siteDir, "assets", "site.js");
-  await writeFileUtf8(jsPath, buildSiteJs());
+// ─── handleSiteKanban ─────────────────────────────────────────────────────────
 
-  // Write index.html
-  const htmlPath = path.join(siteDir, "index.html");
-  await writeFileUtf8(htmlPath, buildSiteHtml());
+async function handleSiteKanban(tail: string[]): Promise<void> {
+  const args = parseArgs(tail);
+  const taskFilter = getStringFlag(args, "task");
+  const buildOnly = getBoolFlag(args, "build-only");
+  const port = parsePortFlag(args, "port", 8000);
+  const host = getStringFlag(args, "host") ?? "127.0.0.1";
+  const noWatch = getBoolFlag(args, "no-watch");
+  const watch = !noWatch;
+  const openBrowser_ = getBoolFlag(args, "open");
 
-  console.log(`OK site build complete`);
-  console.log(`created ${toPosix(htmlPath)}`);
-  console.log(`created ${toPosix(path.join(siteDir, "data", "model.json"))}`);
-  console.log(`created ${toPosix(cssPath)}`);
-  console.log(`created ${toPosix(jsPath)}`);
+  if (buildOnly) {
+    // rebuildKanbanSite now returns the model — use it for the notice,
+    // eliminating a redundant second buildSiteModel call.
+    const { siteDir, storeDir: _storeDir, model } = await rebuildKanbanSite(process.cwd(), taskFilter);
+    if (taskFilter && model.tasks.length === 0) {
+      console.log(`notice no artifacts found for task "${taskFilter}" — site will be empty`);
+    }
+    const htmlPath = path.join(siteDir, "index.html");
+    const modelJsonPath = path.join(siteDir, "data", "model.json");
+    const cssPath = path.join(siteDir, "assets", "site.css");
+    const jsPath = path.join(siteDir, "assets", "site.js");
+    console.log(`OK site build complete`);
+    console.log(`created ${toPosix(htmlPath)}`);
+    console.log(`created ${toPosix(modelJsonPath)}`);
+    console.log(`created ${toPosix(cssPath)}`);
+    console.log(`created ${toPosix(jsPath)}`);
+    return;
+  }
+
+  // Serve mode
+  const { siteDir, storeDir } = await rebuildKanbanSite(process.cwd(), taskFilter);
+
+  const { server, clients, actualPort } = await serveKanban({ siteDir, host, port });
+
+  const url = `http://${host}:${actualPort}/`;
+  console.log(`OK ACS kanban serving at ${url}`);
+
+  if (openBrowser_) {
+    openBrowser(url);
+  }
+
+  let watcher: { close(): void } | undefined;
+  if (watch) {
+    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, () => {
+      broadcastReload(clients);
+    });
+  }
+
+  await awaitSigint(() => {
+    server.close();
+    for (const res of clients) {
+      try { res.end(); } catch { /* ignore */ }
+    }
+    clients.clear();
+    if (watcher) watcher.close();
+  });
+}
+
+// ─── serveKanban / serveStatic / SSE ─────────────────────────────────────────
+
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css":  "text/css; charset=utf-8",
+  ".js":   "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+interface ServeKanbanResult {
+  server: http.Server;
+  clients: Set<ServerResponse>;
+  actualPort: number;
+}
+
+async function serveKanban(opts: {
+  siteDir: string;
+  host: string;
+  port: number;
+}): Promise<ServeKanbanResult> {
+  const { siteDir, host, port } = opts;
+  const clients = new Set<ServerResponse>();
+
+  const server = http.createServer((req, res) => {
+    const url = req.url ?? "/";
+    if (url.startsWith("/__livereload")) {
+      handleLiveReload(req, res, clients);
+      return;
+    }
+    serveStatic(req, res, siteDir);
+  });
+
+  // The listen phase must resolve on success and reject on error.
+  // Using success-callback only causes the promise to hang forever on EADDRINUSE.
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: NodeJS.ErrnoException) => {
+      server.off("listening", onListening);
+      const msg = err.code === "EADDRINUSE"
+        ? `kanban port ${port} is in use — choose another with --port`
+        : `kanban server error: ${err.message}`;
+      reject(new Error(msg));
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+
+  // Post-listen error handler for runtime errors (e.g. connection resets)
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`error kanban server: ${err.message}`);
+  });
+
+  const addr = server.address();
+  const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
+
+  return { server, clients, actualPort };
+}
+
+function serveStatic(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  siteDir: string
+): void {
+  const rawUrl = req.url ?? "/";
+  // Strip query string
+  const urlPath = rawUrl.split("?")[0];
+
+  // Decode and guard against path traversal
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    res.writeHead(400);
+    res.end("Bad Request");
+    return;
+  }
+
+  // Map / -> /index.html
+  const normalized = decoded === "/" ? "/index.html" : decoded;
+
+  const resolved = path.resolve(siteDir, "." + normalized);
+
+  // Path-traversal guard
+  if (resolved !== siteDir && !resolved.startsWith(siteDir + path.sep)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
+
+  if (!existsSync(resolved)) {
+    res.writeHead(404);
+    res.end("Not Found");
+    return;
+  }
+
+  // Reject directory requests (GET /assets, etc.) — readFile on a dir yields EISDIR → 500
+  try {
+    if (statSync(resolved).isDirectory()) {
+      res.writeHead(404);
+      res.end("Not Found");
+      return;
+    }
+  } catch {
+    res.writeHead(404);
+    res.end("Not Found");
+    return;
+  }
+
+  const ext = path.extname(resolved).toLowerCase();
+  const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+
+  readFile(resolved).then((data) => {
+    res.writeHead(200, { "Content-Type": contentType });
+    res.end(data);
+  }).catch(() => {
+    res.writeHead(500);
+    res.end("Internal Server Error");
+  });
+}
+
+function handleLiveReload(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  clients: Set<ServerResponse>
+): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.write(": connected\n\n");
+
+  clients.add(res);
+  res.on("close", () => {
+    clients.delete(res);
+  });
+}
+
+function broadcastReload(clients: Set<ServerResponse>): void {
+  for (const res of clients) {
+    try {
+      res.write("data: reload\n\n");
+    } catch {
+      clients.delete(res);
+    }
+  }
+}
+
+// ─── watchAndRebuild ──────────────────────────────────────────────────────────
+
+function watchAndRebuild(
+  storeDir: string,
+  cwd: string,
+  taskFilter: string | undefined,
+  onRebuilt: () => void
+): { close(): void } {
+  const watchers: Array<ReturnType<typeof fsWatch>> = [];
+  const dirsToWatch = ["artifacts", "handoffs", "audit"];
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  for (const sub of dirsToWatch) {
+    const dir = path.join(storeDir, sub);
+    if (!existsSync(dir)) continue;
+    try {
+      const w = fsWatch(dir, { recursive: true }, () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          rebuildKanbanSite(cwd, taskFilter).then(() => {
+            onRebuilt();
+          }).catch((err: unknown) => {
+            console.error(`warning rebuild failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }, 150);
+      });
+      watchers.push(w);
+    } catch {
+      // Platform may not support recursive watch; skip silently
+    }
+  }
+
+  return {
+    close() {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      for (const w of watchers) {
+        try { w.close(); } catch { /* ignore */ }
+      }
+    }
+  };
+}
+
+// ─── handleSiteBoth ───────────────────────────────────────────────────────────
+
+async function handleSiteBoth(rest: string[]): Promise<void> {
+  const args = parseArgs(rest);
+  const kanbanPort = parsePortFlag(args, "kanban-port", 8000);
+  const docsPort   = parsePortFlag(args, "docs-port", 8001);
+  const host       = getStringFlag(args, "host") ?? "127.0.0.1";
+  const noWatch    = getBoolFlag(args, "no-watch");
+  const watch      = !noWatch;
+  const taskFilter = getStringFlag(args, "task");
+  const openBrowser_ = getBoolFlag(args, "open");
+
+  // Build the Kanban site files first (needed by both paths)
+  const { siteDir, storeDir } = await rebuildKanbanSite(process.cwd(), taskFilter);
+
+  // Check MkDocs BEFORE starting either server so we can report both in the banner.
+  // Neither engine's failure blocks the other.
+  const docsPresent = await mkdocsPreflight();
+  let docsHandle: { kill(): void } | undefined;
+
+  // --- Start Kanban engine (try/catch so docs engine still starts on failure) ---
+  let kanbanServer: http.Server | undefined;
+  let kanbanClients: Set<ServerResponse> | undefined;
+  let kanbanActualPort = kanbanPort;
+
+  try {
+    const kanban = await serveKanban({ siteDir, host, port: kanbanPort });
+    kanbanServer = kanban.server;
+    kanbanClients = kanban.clients;
+    kanbanActualPort = kanban.actualPort;
+  } catch (err: unknown) {
+    console.error(`error ${err instanceof Error ? err.message : String(err)}`);
+    // Kanban failed — still proceed to start docs if available
+  }
+
+  // --- Start Docs engine (independent of Kanban result) ---
+  if (docsPresent) {
+    try {
+      const { configPath } = await generateMkdocsWorkspace(storeDir);
+      docsHandle = startMkdocsServe(configPath, host, docsPort);
+    } catch (err: unknown) {
+      console.error(`error docs engine: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    console.log("notice MkDocs not found — running Kanban only.");
+    console.log("  To enable docs: pip install mkdocs mkdocs-material");
+  }
+
+  // If neither engine started, exit with error
+  if (!kanbanServer && !docsHandle) {
+    throw new Error("Both engines failed to start. See errors above.");
+  }
+
+  // --- Print banner ---
+  const kanbanUrl = kanbanServer ? `http://${host}:${kanbanActualPort}/` : null;
+  const docsUrl   = docsHandle  ? `http://${host}:${docsPort}/`         : null;
+
+  if (kanbanUrl && docsUrl) {
+    console.log(`OK ACS site running:`);
+    console.log(`  kanban  ${kanbanUrl}  (workflow app, live reload)`);
+    console.log(`  docs    ${docsUrl}  (mkdocs material)`);
+    console.log(`Watching artifacts/ handoffs/ audit/ — Ctrl-C to stop both.`);
+  } else if (kanbanUrl) {
+    console.log(`OK ACS kanban serving at ${kanbanUrl}`);
+    console.log(`Watching artifacts/ handoffs/ audit/ — Ctrl-C to stop.`);
+  } else if (docsUrl) {
+    console.log(`OK ACS docs serving at ${docsUrl}`);
+    console.log(`Ctrl-C to stop.`);
+  }
+
+  if (openBrowser_ && kanbanUrl) {
+    openBrowser(kanbanUrl);
+  }
+
+  let watcher: { close(): void } | undefined;
+  if (watch && kanbanServer && kanbanClients) {
+    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, () => {
+      if (kanbanClients) broadcastReload(kanbanClients);
+    });
+  }
+
+  await awaitSigint(() => {
+    if (kanbanServer) {
+      kanbanServer.close();
+      for (const res of kanbanClients ?? []) {
+        try { res.end(); } catch { /* ignore */ }
+      }
+      kanbanClients?.clear();
+    }
+    if (watcher) watcher.close();
+    if (docsHandle) docsHandle.kill();
+  });
+}
+
+// ─── openBrowser ─────────────────────────────────────────────────────────────
+
+function openBrowser(url: string): void {
+  try {
+    let cmd: string;
+    let cmdArgs: string[];
+    if (process.platform === "win32") {
+      cmd = "cmd";
+      cmdArgs = ["/c", "start", "", url];
+    } else if (process.platform === "darwin") {
+      cmd = "open";
+      cmdArgs = [url];
+    } else {
+      cmd = "xdg-open";
+      cmdArgs = [url];
+    }
+    const child = spawn(cmd, cmdArgs, { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {
+    // Opening browser is optional; never fatal
+  }
+}
+
+// ─── awaitSigint ─────────────────────────────────────────────────────────────
+
+function awaitSigint(cleanup: () => void): Promise<void> {
+  return new Promise((resolve) => {
+    process.once("SIGINT", () => {
+      cleanup();
+      resolve();
+    });
+  });
 }
 
 async function writeFileUtf8(filePath: string, content: string): Promise<void> {
@@ -1126,6 +1558,9 @@ function buildSiteJs(): string {
     "    .then(function(r) { return r.json(); })",
     "    .then(function(data) { model = data; navigate('dashboard'); })",
     "    .catch(function(err) { document.getElementById('main').innerHTML = '<p style=\"color:red\">Failed to load model.json: ' + escHtml(String(err)) + '</p>'; });",
+    "  if (location.protocol !== 'file:') {",
+    "    try { new EventSource('/__livereload').onmessage = function () { location.reload(); }; } catch (e) {}",
+    "  }",
     "})();"
   ];
   return lines.join("\n") + "\n";
