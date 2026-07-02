@@ -609,8 +609,12 @@ describe("Scenario: acs validate clean after site-docs / site-docs/ isolation", 
       );
     }
 
-    // If mkdocs ran (exit 0), assert site-docs/mkdocs.yml exists and is under site-docs/ only
-    if (docsResult.status === 0) {
+    // Only assert mkdocs.yml when mkdocs actually ran. A missing mkdocs also
+    // exits 0 (graceful degradation) but prints a "MkDocs not found" notice and
+    // writes nothing — so status===0 alone does NOT imply the workspace was
+    // generated (this is why CI, which has no mkdocs, must not require the yml).
+    const mkdocsAbsent = docsResult.stdout.includes("MkDocs not found");
+    if (docsResult.status === 0 && !mkdocsAbsent) {
       const mkdocsYml = join(dir, ".acs", "site-docs", "mkdocs.yml");
       assert.ok(
         existsSync(mkdocsYml),
