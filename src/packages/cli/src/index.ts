@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, statSync, watch as fsWatch } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import type { ServerResponse } from "node:http";
 import { select, checkbox, input, confirm } from "@inquirer/prompts";
-import { mkdocsPreflight, generateMkdocsWorkspace, startMkdocsServe } from "./docs.js";
+import { mkdocsPreflight, generateMkdocsWorkspace, startMkdocsServe, handleSiteDocs } from "./docs.js";
 import {
   approveHandoff,
   buildContextPackage,
@@ -697,16 +697,25 @@ function getBoolFlag(args: ParsedArgs, name: string): boolean {
 }
 
 /**
- * Parse a port flag as a non-negative integer 0–65535.
- * 0 is valid — it means "OS-assigned ephemeral port".
+ * Parse a port flag as an integer in range.
+ * By default 0 is valid — it means "OS-assigned ephemeral port" (kanban).
+ * Pass `{ allowZero: false }` for engines that cannot bind port 0 (mkdocs),
+ * which shifts the accepted range to 1–65535.
  * Falls back to `fallback` when the flag is absent.
  */
-function parsePortFlag(args: ParsedArgs, name: string, fallback: number): number {
+function parsePortFlag(
+  args: ParsedArgs,
+  name: string,
+  fallback: number,
+  opts: { allowZero?: boolean } = {}
+): number {
+  const allowZero = opts.allowZero ?? true;
   const raw = getStringFlag(args, name);
   if (raw === undefined) return fallback;
   const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0 || n > 65535 || String(n) !== raw) {
-    throw new Error(`--${name} must be an integer between 0 and 65535, got "${raw}"`);
+  const min = allowZero ? 0 : 1;
+  if (!Number.isFinite(n) || n < min || n > 65535 || String(n) !== raw) {
+    throw new Error(`--${name} must be an integer between ${min} and 65535, got "${raw}"`);
   }
   return n;
 }
@@ -733,6 +742,22 @@ function validateHost(host: string, flagName = "--host"): void {
       `Got "${host}"`
     );
   }
+}
+
+/**
+ * Strip surrounding square brackets from an IPv6 literal.
+ *
+ * validateHost accepts the bracketed form ("[::1]") because that is correct for
+ * a printed URL (http://[::1]:8000/). But node's `server.listen(port, host)`
+ * expects the UNBRACKETED address ("::1") and dies with getaddrinfo ENOTFOUND
+ * on the bracketed form. Use this only at the listen() boundary.
+ */
+function unbracketHost(host: string): string {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function printResult(title: string, result: { created: string[]; updated: string[]; warnings: string[] }): void {
@@ -932,8 +957,27 @@ async function handleSite(rest: string[]): Promise<void> {
 
   if (action === "kanban") return handleSiteKanban(tail);
   if (action === "docs") {
-    const { handleSiteDocs } = await import("./docs.js");
-    return handleSiteDocs(tail);
+    // Parse and validate ALL docs flags here so the host flows through the
+    // shared validateHost guard before it can reach a shell spawn in docs.ts,
+    // and the port goes through the shared parsePortFlag (docs cannot bind 0).
+    const args = parseArgs(tail);
+    const host = getStringFlag(args, "host") ?? "127.0.0.1";
+    validateHost(host);
+    const port = parsePortFlag(args, "port", 8001, { allowZero: false });
+    const open = getBoolFlag(args, "open");
+    const buildOnly = getBoolFlag(args, "build-only");
+
+    // Resolve storeDir via the lightweight getStoreInfo (no full site model
+    // build). If the store is not initialized, error out clearly instead of
+    // silently writing a stray .acs/site-docs/mkdocs.yml.
+    const info = await getStoreInfo(process.cwd());
+    if (!info.initialized) {
+      throw new Error(
+        `No initialized context store found at ${process.cwd()}. Run "acs init" first.`
+      );
+    }
+
+    return handleSiteDocs({ buildOnly, host, port, open, storeDir: info.storeDir });
   }
 
   if (action === "build") {
@@ -1084,7 +1128,8 @@ async function serveKanban(opts: {
     };
     server.once("error", onError);
     server.once("listening", onListening);
-    server.listen(port, host);
+    // Listen needs the unbracketed IPv6 form; the printed URL keeps brackets.
+    server.listen(port, unbracketHost(host));
   });
 
   // Post-listen error handler for runtime errors (e.g. connection resets)
@@ -1236,14 +1281,12 @@ function watchAndRebuild(
 async function handleSiteBoth(rest: string[]): Promise<void> {
   const args = parseArgs(rest);
   const kanbanPort = parsePortFlag(args, "kanban-port", 8000);
-  const docsPort   = parsePortFlag(args, "docs-port", 8001);
+  // The docs engine cannot use ephemeral port 0 (mkdocs has no such mode); the
+  // kanban engine legitimately uses 0 for OS-assigned ports. allowZero:false
+  // enforces the 1–65535 range for docs here (no hand-rolled zero check).
+  const docsPort   = parsePortFlag(args, "docs-port", 8001, { allowZero: false });
   const host       = getStringFlag(args, "host") ?? "127.0.0.1";
   validateHost(host);
-  // The docs engine cannot use ephemeral port 0 (mkdocs has no such mode).
-  // The kanban engine legitimately uses 0 for OS-assigned ports; docs must not.
-  if (docsPort === 0) {
-    throw new Error("--docs-port must be an integer between 1 and 65535, got \"0\"");
-  }
   const noWatch    = getBoolFlag(args, "no-watch");
   const watch      = !noWatch;
   const taskFilter = getStringFlag(args, "task");
@@ -1255,7 +1298,12 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
   // Check MkDocs BEFORE starting either server so we can report both in the banner.
   // Neither engine's failure blocks the other.
   const docsPresent = await mkdocsPreflight();
-  let docsHandle: { kill(): void } | undefined;
+  let docsHandle: { kill(): void; waitForExit(): Promise<number | null> } | undefined;
+  // Tracks whether the docs child is still alive. startMkdocsServe returns a
+  // handle BEFORE the child binds, so a truthy handle alone does not mean docs
+  // is running — we must consume waitForExit() to detect an immediate crash
+  // (e.g. docs port occupied) instead of hanging with zero live engines.
+  let docsAlive = false;
 
   // --- Start Kanban engine (try/catch so docs engine still starts on failure) ---
   let kanbanServer: http.Server | undefined;
@@ -1276,8 +1324,27 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
   if (docsPresent) {
     try {
       const { configPath } = await generateMkdocsWorkspace(storeDir);
-      docsHandle = startMkdocsServe(configPath, host, docsPort);
+      const handle = startMkdocsServe(configPath, host, docsPort);
+      docsHandle = handle;
+      docsAlive = true;
+      // Observe the docs child's exit. If it dies and Kanban is not serving,
+      // there is nothing left to keep the process alive — exit non-zero rather
+      // than blocking forever in awaitSigint.
+      void handle.waitForExit().then((code) => {
+        docsAlive = false;
+        if (code !== null && code !== 0) {
+          console.error(`error docs engine exited with code ${code}`);
+        }
+        if (!kanbanServer) {
+          console.error("error both engines have stopped — exiting.");
+          process.exit(1);
+        }
+      });
+      // Give an immediately-dying child (e.g. docs port in use) a brief moment
+      // to fail so we do not print a bogus "docs serving" banner for it.
+      await Promise.race([handle.waitForExit(), delay(400)]);
     } catch (err: unknown) {
+      docsAlive = false;
       console.error(`error docs engine: ${err instanceof Error ? err.message : String(err)}`);
     }
   } else {
@@ -1285,14 +1352,14 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
     console.log("  To enable docs: pip install mkdocs mkdocs-material");
   }
 
-  // If neither engine started, exit with error
-  if (!kanbanServer && !docsHandle) {
+  // If neither engine is live, exit with error instead of hanging.
+  if (!kanbanServer && !docsAlive) {
     throw new Error("Both engines failed to start. See errors above.");
   }
 
   // --- Print banner ---
   const kanbanUrl = kanbanServer ? `http://${host}:${kanbanActualPort}/` : null;
-  const docsUrl   = docsHandle  ? `http://${host}:${docsPort}/`         : null;
+  const docsUrl   = docsAlive   ? `http://${host}:${docsPort}/`         : null;
 
   if (kanbanUrl && docsUrl) {
     console.log(`OK ACS site running:`);
@@ -1439,74 +1506,18 @@ function buildSiteJs(): string {
   // Use string concatenation for the JS code to avoid backtick template literal conflicts.
   // The JS regex patterns for fenced code blocks use triple-backtick which cannot be
   // embedded in a TypeScript template literal.
-  const tripleBacktick = String.fromCharCode(96, 96, 96);
-  const singleBacktick = String.fromCharCode(96);
   const lines: string[] = [
     "/* ACS Static Site — zero-dependency JavaScript */",
     "(function() {",
     "  'use strict';",
     "  var model = null;",
     "  var currentView = 'dashboard';",
-    "  function escHtml(str) {",
-    "    return String(str)",
-    "      .replace(/&/g, '&amp;')",
-    "      .replace(/</g, '&lt;')",
-    "      .replace(/>/g, '&gt;')",
-    "      .replace(/\"/g, '&quot;')",
-    "      .replace(/'/g, '&#39;');",
-    "  }",
-    "  function renderMarkdown(src) {",
-    "    var lines = String(src).split(/\\r?\\n/);",
-    "    var out = [];",
-    "    var inCode = false;",
-    "    var codeLang = '';",
-    "    var codeLines = [];",
-    "    var inUl = false;",
-    "    var inOl = false;",
-    "    function flushUl() { if (inUl) { out.push('</ul>'); inUl = false; } }",
-    "    function flushOl() { if (inOl) { out.push('</ol>'); inOl = false; } }",
-    "    function flushList() { flushUl(); flushOl(); }",
-    "    var FENCE = " + JSON.stringify(tripleBacktick) + ";",
-    "    for (var i = 0; i < lines.length; i++) {",
-    "      var line = lines[i];",
-    "      if (!inCode && line.slice(0,3) === FENCE) {",
-    "        flushList(); inCode = true; codeLang = escHtml(line.slice(3).trim()); codeLines = []; continue;",
-    "      }",
-    "      if (inCode) {",
-    "        if (line.slice(0,3) === FENCE) {",
-    "          out.push('<pre><code' + (codeLang ? ' class=\"lang-' + codeLang + '\"' : '') + '>' + codeLines.map(function(l){ return escHtml(l); }).join('\\n') + '</code></pre>');",
-    "          inCode = false; codeLines = []; codeLang = '';",
-    "        } else { codeLines.push(line); }",
-    "        continue;",
-    "      }",
-    "      var hMatch = line.match(/^(#{1,6})\\s+(.*)/);",
-    "      if (hMatch) { flushList(); var level = hMatch[1].length; out.push('<h' + level + '>' + escHtml(hMatch[2]) + '</h' + level + '>'); continue; }",
-    "      if (/^[-*]\\s/.test(line)) { flushOl(); if (!inUl) { out.push('<ul>'); inUl = true; } out.push('<li>' + renderInline(line.slice(2)) + '</li>'); continue; }",
-    "      var olMatch = line.match(/^\\d+\\.\\s+(.*)/);",
-    "      if (olMatch) { flushUl(); if (!inOl) { out.push('<ol>'); inOl = true; } out.push('<li>' + renderInline(olMatch[1]) + '</li>'); continue; }",
-    "      if (line.trim() === '') { flushList(); continue; }",
-    "      flushList(); out.push('<p>' + renderInline(line) + '</p>');",
-    "    }",
-    "    flushList();",
-    "    return out.join('\\n');",
-    "  }",
-    "  function renderInline(text) {",
-    "    var BT = " + JSON.stringify(singleBacktick) + ";",
-    "    var re1 = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');",
-    "    // escHtml is applied to the whole text first; label/href are already HTML-escaped.",
-    "    return escHtml(text)",
-    "      .replace(re1, '<code>$1</code>')",
-    "      .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_, label, href) {",
-    "        var scheme = href.split(':')[0].toLowerCase();",
-    "        var isSafe = href.charAt(0) === '#' || href.charAt(0) === '/' || href.charAt(0) === '.' ||",
-    "          scheme === 'https' || scheme === 'http' || scheme === 'mailto';",
-    "        // Unsafe scheme: degrade to plain label text (already HTML-escaped)",
-    "        if (!isSafe) { return label; }",
-    "        var safeHref = href.replace(/[^a-zA-Z0-9_.\\-/:?&#=@%+]/g, '');",
-    "        // label is already HTML-escaped from the initial escHtml call",
-    "        return '<a href=\"' + safeHref + '\">' + label + '</a>';",
-    "      });",
-    "  }",
+    // Splice in the SINGLE shared renderer source (escHtml / renderMarkdown /
+    // renderInline). This is the exact same source the unit tests exercise via
+    // buildRendererJs(), so a renderer fix reaches both the shipped bundle and
+    // the tests. rendererSourceLines() emits bare function declarations (no
+    // trailing `return {…}`), so they slot into this IIFE unchanged.
+    ...rendererSourceLines(),
     "  function badge(text, cls) { return '<span class=\"badge badge-' + escHtml(cls) + '\">' + escHtml(text) + '</span>'; }",
     "  function renderDashboard() {",
     "    var v = model.validation;",
@@ -1598,18 +1609,18 @@ function buildSiteJs(): string {
 }
 
 /**
- * Returns a JavaScript source string that, when evaluated with `new Function`,
- * returns an object `{ renderMarkdown, renderInline }`.
- * Intended for unit-testing the Markdown renderer without a browser.
+ * The SINGLE source of truth for the browser Markdown renderer.
  *
- * @example
- *   const src = buildRendererJs();
- *   const { renderMarkdown, renderInline } = new Function(src)();
+ * Returns the JS source lines that declare `escHtml`, `renderMarkdown`, and
+ * `renderInline` as plain function declarations (no wrapping, no trailing
+ * `return`). Both the shipped browser bundle (buildSiteJs) and the unit-test
+ * harness (buildRendererJs) consume THIS, so the renderer exists exactly once
+ * and a fix to it reaches the shipped site.js and the tests simultaneously.
  */
-export function buildRendererJs(): string {
+function rendererSourceLines(): string[] {
   const tripleBacktick = String.fromCharCode(96, 96, 96);
   const singleBacktick = String.fromCharCode(96);
-  const lines: string[] = [
+  return [
     "function escHtml(str) {",
     "  return String(str)",
     "    .replace(/&/g, '&amp;')",
@@ -1669,15 +1680,49 @@ export function buildRendererJs(): string {
     "      // label is already HTML-escaped from the initial escHtml call",
     "      return '<a href=\"' + safeHref + '\">' + label + '</a>';",
     "    });",
-    "}",
-    "return { renderMarkdown: renderMarkdown, renderInline: renderInline };"
+    "}"
   ];
-  return lines.join("\n");
+}
+
+/**
+ * Returns a JavaScript source string that, when evaluated with `new Function`,
+ * returns an object `{ renderMarkdown, renderInline }`.
+ * Intended for unit-testing the Markdown renderer without a browser.
+ *
+ * Composes the shared rendererSourceLines() and appends the `return` that
+ * exposes the functions to the test harness — so tests exercise the exact same
+ * renderer source that buildSiteJs ships in the browser bundle.
+ *
+ * @example
+ *   const src = buildRendererJs();
+ *   const { renderMarkdown, renderInline } = new Function(src)();
+ */
+export function buildRendererJs(): string {
+  return [
+    ...rendererSourceLines(),
+    "return { renderMarkdown: renderMarkdown, renderInline: renderInline };"
+  ].join("\n");
 }
 
 // Only run the CLI when this module is the entry point, not when imported
 // (e.g. tests importing buildRendererJs must not trigger main()).
-const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
+//
+// `npm install -g` / `npm link` install the `acs` bin as a SYMLINK on Unix.
+// path.resolve() does NOT follow symlinks, so process.argv[1] (the symlink
+// path) would never equal the realpath'd module path and main() would never
+// run — the CLI would exit 0 with no output. Resolve argv[1] through
+// fs.realpathSync (this is what the `es-main` package does) so the symlinked
+// bin matches. Fall back to path.resolve if realpathSync throws (e.g. argv[1]
+// missing or not a real path).
+function resolveInvokedPath(argvPath: string | undefined): string {
+  if (!argvPath) return "";
+  try {
+    return realpathSync(argvPath);
+  } catch {
+    return path.resolve(argvPath);
+  }
+}
+const invokedPath = resolveInvokedPath(process.argv[1]);
 const modulePath = fileURLToPath(import.meta.url);
 if (invokedPath && (invokedPath === modulePath || invokedPath === modulePath.replace(/\.js$/, ""))) {
   main(process.argv.slice(2)).catch((error: unknown) => {

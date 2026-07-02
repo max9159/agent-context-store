@@ -1224,9 +1224,10 @@ function setYamlScalarLine(content: string, key: string, value: string): string 
   // All current callers (approval_status, status, reviewed_at, reviewer) are safe, but this is defensive.
   const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`^(${safeKey}):[ \\t]*.*$`, "m");
-  const replacement = `$1: ${value}`;
   if (pattern.test(content)) {
-    return content.replace(pattern, replacement);
+    // Use a function replacement so `$` sequences in `value` (e.g. $&, $$, $1)
+    // are treated literally and never expanded as replacement patterns.
+    return content.replace(pattern, (_m, k) => `${k}: ${value}`);
   }
   // Append — ensure content ends with a newline before appending
   const base = content.endsWith("\n") ? content : content + "\n";

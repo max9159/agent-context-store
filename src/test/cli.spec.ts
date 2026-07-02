@@ -901,7 +901,8 @@ describe("generateMkdocsWorkspace writes only site-docs/, leaves artifacts/ pris
 // Kanban's parsePortFlag intentionally keeps 0 valid (OS-assigned ports).
 
 describe("acs site docs --port 0 is rejected (docs engine cannot use ephemeral port)", () => {
-  // Validation fires in parseDocsArgs() before mkdocsPreflight(), so no store
+  // Port validation fires in the index.ts dispatch (parsePortFlag with
+  // allowZero:false) before store resolution or mkdocsPreflight(), so no store
   // or mkdocs installation is needed for these tests.
 
   test("exits non-zero when --port 0 is supplied", () => {
@@ -958,6 +959,37 @@ describe("acs site docs --port 0 is rejected (docs engine cannot use ephemeral p
     } finally {
       void cleanupTempDir(dir);
     }
+  });
+});
+
+// ─── Finding SECURITY #1: acs site docs --host is validated ───────────────────
+//
+// The docs host flows into `mkdocs serve --dev-addr <host>:<port>` spawned with
+// shell:true on win32, so a hostile --host would let cmd.exe re-parse
+// metacharacters. Parsing moved into the index.ts dispatch which runs the
+// shared validateHost() before the value can reach docs.ts / the shell.
+
+describe("acs site docs --host rejects metacharacters", () => {
+  // validateHost fires in dispatch before store resolution / mkdocs preflight,
+  // so no store or mkdocs installation is needed.
+
+  test("--host with & exits non-zero", () => {
+    const r = runCli(["site", "docs", "--host", "127.0.0.1&calc"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+  });
+
+  test("--host error message names the invalid host or invalid characters", () => {
+    const r = runCli(["site", "docs", "--host", "127.0.0.1&calc"]);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("127.0.0.1&calc") || combined.includes("invalid characters"),
+      `expected invalid host in message; got: ${combined}`
+    );
+  });
+
+  test("--host with a space exits non-zero", () => {
+    const r = runCli(["site", "docs", "--host", "bad host"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
   });
 });
 

@@ -1177,4 +1177,38 @@ describe("approveHandoff", () => {
     // readiness.dor_status should remain "pending" (not "approved")
     assert.ok(content.includes("dor_status: pending"), `readiness.dor_status should remain pending\n${content}`);
   });
+
+  test("reviewer with $ replacement sequences is written verbatim on re-approval (no $ expansion)", async () => {
+    const taskId = "APPR-DOLLAR";
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId, title: "SRS dollar" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId });
+    const handoffFile = join(dir, hresult.handoffPath);
+
+    // First approval writes the reviewer line via the append branch.
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewer: "oldTeam" });
+
+    // Reset approval_status back to pending so a second approval proceeds instead of
+    // short-circuiting. This leaves a pre-existing top-level `reviewer:` line, forcing
+    // setYamlScalarLine down the String.replace branch on re-approval.
+    const reset = (await readText(handoffFile)).replace(/^approval_status:.*$/m, "approval_status: pending");
+    await writeFile(handoffFile, reset, "utf8");
+
+    // Re-approve with a reviewer containing regex-replacement metacharacters. These must
+    // be persisted literally, not expanded ($& -> whole match, $$ -> $, $1 -> capture group).
+    const reviewer = "Ops$&Team$$End$1";
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewer });
+
+    const content = await readText(handoffFile);
+    assert.ok(
+      content.includes(`reviewer: ${reviewer}`),
+      `YAML should contain the reviewer value verbatim (no $ expansion)\n${content}`
+    );
+    // Guard against the specific corruption: the whole-match expansion would inject the
+    // matched "reviewer:" text back into the value.
+    assert.ok(
+      !content.includes("reviewer: Opsreviewer:"),
+      `reviewer value must not contain expanded $& match\n${content}`
+    );
+  });
 });

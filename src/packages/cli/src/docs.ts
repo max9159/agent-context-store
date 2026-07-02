@@ -8,6 +8,81 @@ import { spawn } from "node:child_process";
 // extension). Keep imports one-way: docs.ts must NOT import from index.ts.
 // Pass any shared values (port, host, storeDir, etc.) as function arguments.
 
+const IS_WIN = process.platform === "win32";
+
+/**
+ * When we spawn mkdocs through the shell (win32), Node performs NO argument
+ * quoting, so a path containing a space (e.g. C:\Users\John Doe\...) would be
+ * split into multiple args and mkdocs would fail. Wrap path-bearing args in
+ * double quotes under shell mode. Windows paths cannot contain a double quote,
+ * so this is always safe. Under non-shell (POSIX) spawn, arguments are passed
+ * verbatim, so no quoting is applied.
+ */
+function shellQuote(value: string): string {
+  return IS_WIN ? `"${value}"` : value;
+}
+
+interface MkdocsHandle {
+  kill(): void;
+  waitForExit(): Promise<number | null>;
+}
+
+interface SpawnMkdocsOpts {
+  /** How to wire the child's stdin. Serve mode inherits; background ignores. */
+  stdin?: "inherit" | "ignore";
+}
+
+/**
+ * The single mkdocs spawn wrapper. Every mkdocs invocation (serve, build,
+ * background serve) goes through here so the spawn config and the `[docs]`
+ * stdout/stderr prefixing live in exactly one place.
+ *
+ * Returns a handle exposing `kill()` and `waitForExit()`. The exit promise
+ * resolves with the child's exit code (or null on spawn error).
+ */
+function spawnMkdocs(args: string[], opts: SpawnMkdocsOpts = {}): MkdocsHandle {
+  const child = spawn("mkdocs", args, {
+    shell: IS_WIN,
+    stdio: [opts.stdin ?? "inherit", "pipe", "pipe"],
+  });
+
+  if (child.stdout) {
+    child.stdout.on("data", (chunk: Buffer) => {
+      process.stdout.write(`[docs] ${String(chunk)}`);
+    });
+  }
+  if (child.stderr) {
+    child.stderr.on("data", (chunk: Buffer) => {
+      process.stderr.write(`[docs] ${String(chunk)}`);
+    });
+  }
+
+  const exitPromise: Promise<number | null> = new Promise((resolve) => {
+    let settled = false;
+    const done = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+    };
+    child.on("close", (code) => done(code));
+    child.on("error", (err) => {
+      console.error(`[docs] error: ${err.message}`);
+      done(null);
+    });
+  });
+
+  return {
+    kill: () => {
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
+    },
+    waitForExit: () => exitPromise,
+  };
+}
+
 /**
  * Run `mkdocs --version` to detect if MkDocs is present on PATH.
  * Resolves true on exit-code 0, false for any failure (including ENOENT).
@@ -16,9 +91,8 @@ import { spawn } from "node:child_process";
  */
 export function mkdocsPreflight(): Promise<boolean> {
   return new Promise((resolve) => {
-    const isWin = process.platform === "win32";
     const child = spawn("mkdocs", ["--version"], {
-      shell: isWin,
+      shell: IS_WIN,
       stdio: "ignore",
     });
     child.on("error", () => resolve(false));
@@ -85,24 +159,32 @@ export async function generateMkdocsWorkspace(
   return { configPath, docsDir };
 }
 
+export interface HandleSiteDocsOptions {
+  /** Generate the workspace and run `mkdocs build`, then exit (no server). */
+  buildOnly: boolean;
+  /** Bind host for `mkdocs serve` (already validated by the caller). */
+  host: string;
+  /** Port for `mkdocs serve` (already validated; never 0). */
+  port: number;
+  /** Forward `--open` to `mkdocs serve` so it opens the browser (serve only). */
+  open: boolean;
+  /** Resolved store directory (caller reads it from getStoreInfo). */
+  storeDir: string;
+}
+
 /**
- * Handle `acs site docs [flags]`.
+ * Handle `acs site docs`.
  *
- * Flags accepted via tail (string array):
- *   --build-only   Generate and exit; do not start a server.
- *   --port <N>     Port for mkdocs serve (default 8001). Does NOT support 0.
- *   --host <H>     Bind host (default 127.0.0.1).
- *   --open         Open browser after start (handled by mkdocs itself; flag is
- *                  passed through for user info but not used here).
+ * All flag parsing, host validation, port validation and store resolution are
+ * done by the caller (index.ts) and passed in as a plain options object. This
+ * keeps docs.ts free of any dependency on index.ts and ensures `--host` flows
+ * through the shared `validateHost` guard before it reaches a shell spawn.
  *
  * Returns a Promise that resolves when the docs engine is done (either
- * --build-only finishes or mkdocs serve exits / SIGINT received).
+ * `--build-only` finishes or `mkdocs serve` exits / SIGINT is received).
  */
-export async function handleSiteDocs(tail: string[]): Promise<void> {
-  const args = parseDocsArgs(tail);
-  const port = args.port;
-  const host = args.host;
-  const buildOnly = args.buildOnly;
+export async function handleSiteDocs(opts: HandleSiteDocsOptions): Promise<void> {
+  const { buildOnly, host, port, open, storeDir } = opts;
 
   const present = await mkdocsPreflight();
   if (!present) {
@@ -112,18 +194,6 @@ export async function handleSiteDocs(tail: string[]): Promise<void> {
     return; // exit 0 — non-fatal
   }
 
-  const cwd = process.cwd();
-  // We need the storeDir. Because docs.ts cannot import index.ts, we resolve
-  // it locally using a minimal buildSiteModel call — but we don't have that
-  // here. Instead, we import from the core directly (allowed; docs.ts only
-  // imports from external packages, not from index.ts).
-  //
-  // Resolve storeDir via a dynamic import of the core package so we avoid a
-  // circular dep. This is safe because core has no dep on index.ts.
-  const { buildSiteModel } = await import("agent-context-store-core");
-  const model = await buildSiteModel(cwd);
-  const { storeDir } = model.store;
-
   const { configPath } = await generateMkdocsWorkspace(storeDir);
 
   if (buildOnly) {
@@ -132,54 +202,42 @@ export async function handleSiteDocs(tail: string[]): Promise<void> {
     return;
   }
 
-  await runMkdocsServe(configPath, host, port);
+  await runMkdocsServe(configPath, host, port, open);
 }
 
 /**
- * Spawn `mkdocs serve` and forward output with a `[docs]` prefix.
- * Returns a Promise that resolves when the child exits or SIGINT is received.
+ * Spawn `mkdocs serve` (foreground) and forward output with a `[docs]` prefix.
+ * Wires SIGINT to kill the child and removes the listener on the child's own
+ * exit so no listener leaks (which would otherwise try to kill an already-dead
+ * child on a later SIGINT).
+ *
+ * When `open` is set, `--open` is forwarded to mkdocs so it opens the browser.
+ * Returns a Promise that resolves when the child exits.
  */
 export function runMkdocsServe(
   configPath: string,
   host: string,
-  port: number
+  port: number,
+  open: boolean
 ): Promise<void> {
-  return new Promise((resolve) => {
-    const isWin = process.platform === "win32";
-    const child = spawn(
-      "mkdocs",
-      ["serve", "--dev-addr", `${host}:${port}`, "-f", configPath],
-      {
-        shell: isWin,
-        stdio: ["inherit", "pipe", "pipe"],
-      }
-    );
+  const args = [
+    "serve",
+    "--dev-addr",
+    shellQuote(`${host}:${port}`),
+    "-f",
+    shellQuote(configPath),
+  ];
+  if (open) args.push("--open");
 
-    if (child.stdout) {
-      child.stdout.on("data", (chunk: Buffer) => {
-        process.stdout.write(`[docs] ${String(chunk)}`);
-      });
-    }
-    if (child.stderr) {
-      child.stderr.on("data", (chunk: Buffer) => {
-        process.stderr.write(`[docs] ${String(chunk)}`);
-      });
-    }
+  const handle = spawnMkdocs(args, { stdin: "inherit" });
 
-    child.on("close", (_code) => {
-      resolve();
-    });
+  const onSigint = () => {
+    handle.kill();
+  };
+  process.once("SIGINT", onSigint);
 
-    child.on("error", (err) => {
-      console.error(`[docs] error: ${err.message}`);
-      resolve();
-    });
-
-    // Forward SIGINT to child
-    process.once("SIGINT", () => {
-      child.kill();
-      resolve();
-    });
+  return handle.waitForExit().then(() => {
+    process.off("SIGINT", onSigint);
   });
 }
 
@@ -190,143 +248,46 @@ export function runMkdocsBuild(
   configPath: string,
   outputDir: string
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const isWin = process.platform === "win32";
-    const child = spawn(
-      "mkdocs",
-      ["build", "-f", configPath, "-d", outputDir],
-      {
-        shell: isWin,
-        stdio: ["inherit", "pipe", "pipe"],
-      }
-    );
+  const args = [
+    "build",
+    "-f",
+    shellQuote(configPath),
+    "-d",
+    shellQuote(outputDir),
+  ];
 
-    if (child.stdout) {
-      child.stdout.on("data", (chunk: Buffer) => {
-        process.stdout.write(`[docs] ${String(chunk)}`);
-      });
+  const handle = spawnMkdocs(args, { stdin: "inherit" });
+
+  return handle.waitForExit().then((code) => {
+    if (code === 0) {
+      console.log(`OK docs build complete — output at ${outputDir}`);
+      return;
     }
-    if (child.stderr) {
-      child.stderr.on("data", (chunk: Buffer) => {
-        process.stderr.write(`[docs] ${String(chunk)}`);
-      });
-    }
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        console.log(`OK docs build complete — output at ${outputDir}`);
-        resolve();
-      } else {
-        reject(new Error(`mkdocs build exited with code ${code ?? "null"}`));
-      }
-    });
-
-    child.on("error", (err) => {
-      reject(err);
-    });
+    throw new Error(`mkdocs build exited with code ${code ?? "null"}`);
   });
 }
 
 /**
- * Start mkdocs serve in the background (for both-engines mode).
- * Returns a handle with a kill() function so the caller can tear it down.
+ * Start `mkdocs serve` in the background (for both-engines mode).
+ * Returns a handle with `kill()` and `waitForExit()` so the caller can tear it
+ * down and observe the child's liveness.
  *
  * The function does NOT await the child — it starts it and returns immediately
- * so the caller can print the combined banner and await SIGINT.
+ * so the caller can print the combined banner and await SIGINT. The caller is
+ * responsible for consuming `waitForExit()` to detect an immediate crash.
  */
 export function startMkdocsServe(
   configPath: string,
   host: string,
   port: number
 ): { kill(): void; waitForExit(): Promise<number | null> } {
-  const isWin = process.platform === "win32";
-  const child = spawn(
-    "mkdocs",
-    ["serve", "--dev-addr", `${host}:${port}`, "-f", configPath],
-    {
-      shell: isWin,
-      stdio: ["ignore", "pipe", "pipe"],
-    }
-  );
+  const args = [
+    "serve",
+    "--dev-addr",
+    shellQuote(`${host}:${port}`),
+    "-f",
+    shellQuote(configPath),
+  ];
 
-  if (child.stdout) {
-    child.stdout.on("data", (chunk: Buffer) => {
-      process.stdout.write(`[docs] ${String(chunk)}`);
-    });
-  }
-  if (child.stderr) {
-    child.stderr.on("data", (chunk: Buffer) => {
-      process.stderr.write(`[docs] ${String(chunk)}`);
-    });
-  }
-
-  child.on("error", (err) => {
-    console.error(`[docs] error: ${err.message}`);
-  });
-
-  const exitPromise: Promise<number | null> = new Promise((resolve) => {
-    child.on("close", (code) => {
-      if (code !== null && code !== 0) {
-        console.error(`[docs] mkdocs exited with code ${code}`);
-      }
-      resolve(code);
-    });
-  });
-
-  return {
-    kill: () => {
-      try {
-        child.kill();
-      } catch {
-        // ignore
-      }
-    },
-    waitForExit: () => exitPromise,
-  };
+  return spawnMkdocs(args, { stdin: "ignore" });
 }
-
-// ─── Internal arg parser for docs flags ──────────────────────────────────────
-
-interface DocsArgs {
-  buildOnly: boolean;
-  port: number;
-  host: string;
-}
-
-function parseDocsArgs(args: string[]): DocsArgs {
-  const flags: Record<string, string | boolean> = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (!arg.startsWith("--")) continue;
-    const name = arg.slice(2);
-    const next = args[i + 1];
-    if (!next || next.startsWith("--")) {
-      flags[name] = true;
-    } else {
-      flags[name] = next;
-      i++;
-    }
-  }
-
-  return {
-    buildOnly: flags["build-only"] === true || flags["build-only"] === "true",
-    port: parsePortValue(flags["port"], 8001),
-    host: typeof flags["host"] === "string" ? flags["host"] : "127.0.0.1",
-  };
-}
-
-function parsePortValue(
-  value: string | boolean | undefined,
-  fallback: number
-): number {
-  if (value === undefined || value === true) return fallback;
-  const str = String(value);
-  const n = Number.parseInt(str, 10);
-  if (!Number.isFinite(n) || n < 1 || n > 65535 || String(n) !== str) {
-    throw new Error(
-      `--port must be an integer between 1 and 65535, got "${str}"`
-    );
-  }
-  return n;
-}
-

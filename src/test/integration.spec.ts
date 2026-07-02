@@ -515,13 +515,19 @@ describe("Scenario: kanban serve smoke (async spawn, --port 0)", () => {
   // Test #10 — path traversal rejected
   test("path traversal GET /../../etc/passwd returns 403 or 404", async () => {
     await withKanbanServer(dir, async (baseUrl) => {
-      const traversalRes = await httpGet(baseUrl + "/../../etc/passwd");
-      assert.ok(
-        traversalRes.status === 403 || traversalRes.status === 404,
-        `traversal should return 403 or 404; got ${traversalRes.status}`
+      // Send the RAW, unnormalized path so the literal dot-dot segments reach
+      // the server and actually exercise the traversal guard in serveStatic().
+      // (httpGet() would let `new URL()` normalize this to /etc/passwd first,
+      // making it an ordinary 404 that never tests the guard.)
+      const traversalRes = await httpGetRawPath(baseUrl, "/../../etc/passwd");
+      assert.equal(
+        traversalRes.status,
+        403,
+        `raw traversal should be rejected by the guard with 403; got ${traversalRes.status}`
       );
 
-      // Also test percent-encoded variant
+      // Also test percent-encoded variant — decodeURIComponent restores the
+      // dot-dot segments server-side, so the guard returns 403 here too.
       const encodedRes = await httpGet(baseUrl + "/%2e%2e%2fetc%2fpasswd");
       assert.ok(
         encodedRes.status === 403 || encodedRes.status === 404,
@@ -676,6 +682,45 @@ function httpGet(url: string): Promise<HttpResult> {
     );
     req.on("error", reject);
     req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+  });
+}
+
+/**
+ * HTTP GET that sends a RAW, unnormalized request path to the server.
+ *
+ * httpGet() runs the URL through `new URL(...)`, whose WHATWG parser collapses
+ * `/../../etc/passwd` to `/etc/passwd` BEFORE the request is sent — so the
+ * server's traversal guard is never exercised. Here we parse ONLY the origin
+ * for host/port and hand `rawPath` to http.request({ path }) verbatim, so the
+ * literal dot-dot segments reach serveStatic() and trip the guard.
+ */
+function httpGetRawPath(baseUrl: string, rawPath: string): Promise<HttpResult> {
+  return new Promise((resolve, reject) => {
+    const origin = new URL(baseUrl);
+    const req = http.request(
+      {
+        host: origin.hostname,
+        port: Number(origin.port),
+        method: "GET",
+        path: rawPath,
+        timeout: 5000,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+          else if (Array.isArray(v)) headers[k] = v.join(", ");
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ status, body: Buffer.concat(chunks).toString(), headers }));
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+    req.end();
   });
 }
 
