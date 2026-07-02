@@ -895,6 +895,135 @@ describe("generateMkdocsWorkspace writes only site-docs/, leaves artifacts/ pris
   });
 });
 
+// ─── Finding #1: docs port 0 is rejected ─────────────────────────────────────
+//
+// MkDocs has no ephemeral-port mode; port 0 must be rejected before preflight.
+// Kanban's parsePortFlag intentionally keeps 0 valid (OS-assigned ports).
+
+describe("acs site docs --port 0 is rejected (docs engine cannot use ephemeral port)", () => {
+  // Validation fires in parseDocsArgs() before mkdocsPreflight(), so no store
+  // or mkdocs installation is needed for these tests.
+
+  test("exits non-zero when --port 0 is supplied", () => {
+    const r = runCli(["site", "docs", "--port", "0"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+  });
+
+  test("error message mentions 'between 1 and 65535'", () => {
+    const r = runCli(["site", "docs", "--port", "0"]);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("1 and 65535"),
+      `expected "between 1 and 65535" in output; got: ${combined}`
+    );
+  });
+
+  test("error message includes the invalid value 0", () => {
+    const r = runCli(["site", "docs", "--port", "0"]);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes('"0"') || combined.includes("got 0") || combined.includes("got \"0\""),
+      `expected the invalid value in error output; got: ${combined}`
+    );
+  });
+
+  test("exits non-zero when --docs-port 0 is supplied to bare acs site", () => {
+    // handleSiteBoth validates docsPort === 0 before rebuildKanbanSite,
+    // so this exits fast even without an initialised store in cwd.
+    const r = runCli(["site", "--docs-port", "0"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+  });
+
+  test("--docs-port 0 error message mentions 'between 1 and 65535'", () => {
+    const r = runCli(["site", "--docs-port", "0"]);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("1 and 65535"),
+      `expected "between 1 and 65535" in output; got: ${combined}`
+    );
+  });
+
+  test("kanban --port 0 is still accepted (ephemeral port mode must stay valid)", () => {
+    // Port validation for kanban uses parsePortFlag which allows 0.
+    // A temp store dir is needed so buildSiteModel doesn't fail.
+    const dir = makeTempDir("acs-kanban-port0-");
+    try {
+      runCli(["init", dir]);
+      // We can't easily run a live server synchronously, but we can confirm
+      // the argument is not rejected by checking --build-only (which uses the
+      // same arg-parse path and ignores port).
+      const r = runCli(["site", "kanban", "--build-only", "--port", "0"], { cwd: dir });
+      // --build-only with port 0 is fine: port is parsed (valid) but not used
+      assert.equal(r.status, 0, `kanban --port 0 must not be rejected; stderr: ${r.stderr}`);
+    } finally {
+      void cleanupTempDir(dir);
+    }
+  });
+});
+
+// ─── Finding #2: --host validation rejects shell metacharacters ───────────────
+//
+// openBrowser on win32 passes the URL through "cmd /c start"; a hostile --host
+// containing & would let cmd.exe re-parse metacharacters. validateHost() blocks
+// this at argument-parse time with a clear upfront error.
+
+describe("acs site kanban --host rejects metacharacters", () => {
+  // validateHost fires before rebuildKanbanSite, so no store is needed.
+
+  test("--host with & exits non-zero", () => {
+    const r = runCli(["site", "kanban", "--host", "127.0.0.1&calc"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+  });
+
+  test("--host error message names the invalid host", () => {
+    const r = runCli(["site", "kanban", "--host", "127.0.0.1&calc"]);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("127.0.0.1&calc") || combined.includes("invalid characters"),
+      `expected invalid host in message; got: ${combined}`
+    );
+  });
+
+  test("--host with space exits non-zero", () => {
+    const r = runCli(["site", "kanban", "--host", "bad host"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+  });
+
+  test("normal hosts are accepted: localhost", () => {
+    const dir = makeTempDir("acs-host-ok-");
+    try {
+      runCli(["init", dir]);
+      // --build-only skips serving so validateHost passes and we get a build
+      const r = runCli(["site", "kanban", "--build-only", "--host", "localhost"], { cwd: dir });
+      assert.equal(r.status, 0, `localhost must be accepted; stderr: ${r.stderr}`);
+    } finally {
+      void cleanupTempDir(dir);
+    }
+  });
+
+  test("normal hosts are accepted: 127.0.0.1", () => {
+    const dir = makeTempDir("acs-host-ok2-");
+    try {
+      runCli(["init", dir]);
+      const r = runCli(["site", "kanban", "--build-only", "--host", "127.0.0.1"], { cwd: dir });
+      assert.equal(r.status, 0, `127.0.0.1 must be accepted; stderr: ${r.stderr}`);
+    } finally {
+      void cleanupTempDir(dir);
+    }
+  });
+
+  test("normal hosts are accepted: 0.0.0.0", () => {
+    const dir = makeTempDir("acs-host-ok3-");
+    try {
+      runCli(["init", dir]);
+      const r = runCli(["site", "kanban", "--build-only", "--host", "0.0.0.0"], { cwd: dir });
+      assert.equal(r.status, 0, `0.0.0.0 must be accepted; stderr: ${r.stderr}`);
+    } finally {
+      void cleanupTempDir(dir);
+    }
+  });
+});
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**

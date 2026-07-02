@@ -711,6 +711,30 @@ function parsePortFlag(args: ParsedArgs, name: string, fallback: number): number
   return n;
 }
 
+/**
+ * Validate a --host value used in serve commands.
+ *
+ * Accepted characters: letters, digits, dot, hyphen, colon (IPv6), square
+ * brackets (IPv6 literal notation). This covers all normal use-cases:
+ *   localhost, 127.0.0.1, 0.0.0.0, ::1, [::1], example.com
+ *
+ * Rejected: spaces, &, ;, quotes, slashes, and other shell metacharacters
+ * that could be re-parsed by cmd.exe on Windows when the URL is built from
+ * the host value and passed to "cmd /c start".
+ *
+ * Throws a clear Error when the value is invalid; never throws for undefined.
+ */
+function validateHost(host: string, flagName = "--host"): void {
+  // Allow: letters (a-z A-Z), digits (0-9), dot, hyphen, colon, brackets
+  if (!/^[A-Za-z0-9.\-:\[\]]+$/.test(host)) {
+    throw new Error(
+      `${flagName} contains invalid characters. ` +
+      `Allowed: letters, digits, dot, hyphen, colon, brackets (e.g. localhost, 127.0.0.1, ::1). ` +
+      `Got "${host}"`
+    );
+  }
+}
+
 function printResult(title: string, result: { created: string[]; updated: string[]; warnings: string[] }): void {
   console.log(`OK ${title}`);
   for (const filePath of result.created) {
@@ -959,6 +983,7 @@ async function handleSiteKanban(tail: string[]): Promise<void> {
   const buildOnly = getBoolFlag(args, "build-only");
   const port = parsePortFlag(args, "port", 8000);
   const host = getStringFlag(args, "host") ?? "127.0.0.1";
+  validateHost(host);
   const noWatch = getBoolFlag(args, "no-watch");
   const watch = !noWatch;
   const openBrowser_ = getBoolFlag(args, "open");
@@ -1213,6 +1238,12 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
   const kanbanPort = parsePortFlag(args, "kanban-port", 8000);
   const docsPort   = parsePortFlag(args, "docs-port", 8001);
   const host       = getStringFlag(args, "host") ?? "127.0.0.1";
+  validateHost(host);
+  // The docs engine cannot use ephemeral port 0 (mkdocs has no such mode).
+  // The kanban engine legitimately uses 0 for OS-assigned ports; docs must not.
+  if (docsPort === 0) {
+    throw new Error("--docs-port must be an integer between 1 and 65535, got \"0\"");
+  }
   const noWatch    = getBoolFlag(args, "no-watch");
   const watch      = !noWatch;
   const taskFilter = getStringFlag(args, "task");
