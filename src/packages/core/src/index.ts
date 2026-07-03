@@ -846,16 +846,30 @@ export async function explainRole(options: ExplainRoleOptions): Promise<RoleExpl
   };
 }
 
-export async function getNextActions(options: NextActionsOptions): Promise<NextActionsResult> {
-  const policy = await loadPolicy(options.rootDir);
+interface NextActionsCoreOptions {
+  policy: AcsPolicy;
+  artifacts: ArtifactRecord[];
+  role: string;
+  taskId: string;
+  mode?: AcsMode;
+}
+
+/**
+ * Pure core of getNextActions: given an already-loaded policy and an
+ * already-resolved artifact list for the task, compute the next-actions
+ * result with no I/O. getNextActions (single-task CLI calls) and
+ * buildSiteModel (N tasks x all workflow stages) both call this so the
+ * policy load + artifact-tree walk happen exactly once per call site
+ * instead of once per (stage, task) pair.
+ */
+function computeNextActionsCore(options: NextActionsCoreOptions): NextActionsResult {
+  const { policy, artifacts, taskId } = options;
   const role = canonicalRole(policy, options.role);
   const stage = policy.workflow.stages.find((item) => item.owner === role);
   if (!stage) {
     throw new Error(`No workflow stage found for role "${options.role}"`);
   }
   const mode: AcsMode = options.mode ?? "strict";
-  const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
-  const artifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
   const foundTypes = new Set(artifacts.map((artifact) => canonicalArtifactType(policy, artifact.type)));
   const requiredInputs = stage.inputs.map((type) => ({ type, found: foundTypes.has(type) }));
   const profile = findRole(policy, role);
@@ -866,7 +880,7 @@ export async function getNextActions(options: NextActionsOptions): Promise<NextA
   if (isEntry && mode === "relaxed") {
     hints.push({
       for: "ai",
-      message: `No artifacts exist for task "${options.taskId}". You are the entry role. First create the synthetic entry handoff: acs handoff create --from system --to ${role} --task ${options.taskId} --mode relaxed`
+      message: `No artifacts exist for task "${taskId}". You are the entry role. First create the synthetic entry handoff: acs handoff create --from system --to ${role} --task ${taskId} --mode relaxed`
     });
   }
   if (missingInputs.length > 0 && mode === "strict") {
@@ -878,18 +892,25 @@ export async function getNextActions(options: NextActionsOptions): Promise<NextA
 
   return {
     role,
-    taskId: options.taskId,
+    taskId,
     currentStage: stage.name,
     requiredInputs,
     suggestedOutputs: stage.outputs,
     suggestedCommands: [
-      `acs package --role ${role} --task ${options.taskId}`,
-      ...stage.outputs.map((type) => `acs ${role} new ${type} --task ${options.taskId}`),
-      ...(profile?.handoffTargets ?? []).map((target) => `acs handoff create --from ${role} --to ${target} --task ${options.taskId}`)
+      `acs package --role ${role} --task ${taskId}`,
+      ...stage.outputs.map((type) => `acs ${role} new ${type} --task ${taskId}`),
+      ...(profile?.handoffTargets ?? []).map((target) => `acs handoff create --from ${role} --to ${target} --task ${taskId}`)
     ],
     mode,
     ...(hints.length > 0 ? { hints } : {})
   };
+}
+
+export async function getNextActions(options: NextActionsOptions): Promise<NextActionsResult> {
+  const policy = await loadPolicy(options.rootDir);
+  const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
+  const artifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
+  return computeNextActionsCore({ policy, artifacts, role: options.role, taskId: options.taskId, mode: options.mode });
 }
 
 export async function createArtifact(options: CreateArtifactOptions): Promise<AcsResult & { artifactPath: string; artifactId: string }> {
@@ -1662,11 +1683,14 @@ export async function buildSiteModel(rootDirInput: string, taskFilter?: string):
       timeline = [];
     }
 
-    // Next actions by role (for the core roles)
+    // Next actions by role (for the core roles). Uses the pure
+    // computeNextActionsCore helper with the policy and artifacts already
+    // loaded above — avoids re-running loadPolicy + findArtifactsForTask
+    // once per (stage, task) pair on every rebuild.
     const nextActionsByRole: Record<string, { suggestedOutputs: string[]; suggestedCommands: string[] }> = {};
     for (const stage of policy.workflow.stages) {
       try {
-        const next = await getNextActions({ rootDir: rootDirInput, role: stage.owner, taskId, mode: "relaxed" });
+        const next = computeNextActionsCore({ policy, artifacts: taskArtifacts, role: stage.owner, taskId, mode: "relaxed" });
         nextActionsByRole[stage.owner] = {
           suggestedOutputs: next.suggestedOutputs,
           suggestedCommands: next.suggestedCommands
@@ -2889,8 +2913,16 @@ export async function readTaskLog(options: ReadTaskLogOptions): Promise<AuditLog
 
 /**
  * Compute the role that should act next for a task.
- * Semantics: owner of the first stage whose owner has NO artifacts yet.
- * Correctly handles a role owning multiple non-contiguous stages.
+ *
+ * Semantics: the first stage AFTER the last stage that already has artifacts
+ * whose owner has NO artifacts yet — i.e. forward continuation from the
+ * task's furthest confirmed progress. Never suggests going backwards to an
+ * earlier, deliberately-skipped stage (relaxed mode allows entering the
+ * workflow mid-stream, e.g. at SA with no BA artifacts).
+ *
+ * Correctly handles a role owning multiple non-contiguous stages, including
+ * a workflow that lists the same owner more than once (e.g. a duplicate
+ * tail "sa" review stage).
  */
 export function computeNextRole(
   ownerSet: ReadonlySet<string>,
@@ -2899,11 +2931,41 @@ export function computeNextRole(
   if (ownerSet.size === 0) {
     return { suggestedNextRole: "any", isEntry: true };
   }
+
+  // Canonical pipeline order: dedupe stages by owner, keeping only the FIRST
+  // occurrence. Anchoring "how far the task has progressed" on this deduped
+  // sequence prevents a LATER duplicate occurrence of an already-encountered
+  // owner from being mistaken for further progress than has actually
+  // happened (e.g. ownerSet {ba, sa, dev} on [ba, sa, dev, qa, sa] must
+  // anchor on dev, not on the later duplicate sa).
+  const seenOwners = new Set<string>();
+  const uniqueStages: Array<{ owner: string }> = [];
   for (const stage of stages) {
-    if (!ownerSet.has(stage.owner)) {
-      return { suggestedNextRole: stage.owner, isEntry: false };
+    if (!seenOwners.has(stage.owner)) {
+      seenOwners.add(stage.owner);
+      uniqueStages.push(stage);
     }
   }
+
+  // Anchor: the LAST stage (in canonical order) whose owner already has
+  // artifacts. Suggestions only look FORWARD from this anchor.
+  let lastOwnedIndex = -1;
+  for (let i = 0; i < uniqueStages.length; i += 1) {
+    if (ownerSet.has(uniqueStages[i].owner)) {
+      lastOwnedIndex = i;
+    }
+  }
+
+  for (let i = lastOwnedIndex + 1; i < uniqueStages.length; i += 1) {
+    if (!ownerSet.has(uniqueStages[i].owner)) {
+      return { suggestedNextRole: uniqueStages[i].owner, isEntry: false };
+    }
+  }
+
+  // Every stage in the canonical order already has an owner with artifacts —
+  // fall back to the owner of the LAST stage in the ORIGINAL (non-deduped)
+  // list, which correctly surfaces a duplicate tail owner (e.g. a final "sa"
+  // review stage) rather than the deduped tail.
   const last = stages[stages.length - 1];
   return { suggestedNextRole: last?.owner ?? "ba", isEntry: false };
 }

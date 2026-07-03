@@ -975,6 +975,27 @@ describe("computeNextRole", () => {
     assert.equal(result.suggestedNextRole, "ba");
     assert.equal(result.isEntry, false);
   });
+
+  test("F4 regression: mid-stream entry {sa} -> dev, not backwards to ba", () => {
+    // Relaxed mode allows entering at SA with no BA artifacts. The suggestion
+    // must continue FORWARD from sa, never suggest the deliberately-skipped
+    // upstream ba stage.
+    const result = computeNextRole(new Set(["sa"]), DEFAULT_STAGES);
+    assert.equal(result.suggestedNextRole, "dev");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("F4 regression: custom workflow without duplicated tail owner — {sa} -> dev", () => {
+    const CUSTOM_STAGES = [
+      { owner: "ba" },
+      { owner: "sa" },
+      { owner: "dev" },
+      { owner: "qa" }
+    ];
+    const result = computeNextRole(new Set(["sa"]), CUSTOM_STAGES);
+    assert.equal(result.suggestedNextRole, "dev");
+    assert.equal(result.isEntry, false);
+  });
 });
 
 // ─── getTasksOverview — Bug 1 end-to-end regression ──────────────────────────

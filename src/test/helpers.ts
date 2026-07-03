@@ -4,6 +4,7 @@ import { rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { platform } from "node:process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -110,4 +111,55 @@ export function isolatedEnv(envDir: string): NodeJS.ProcessEnv {
 /** Initialize a context store in the given directory. */
 export function initStore(dir: string): CliResult {
   return runCli(["init", dir]);
+}
+
+/**
+ * Build a PATH that omits any directory containing an `mkdocs` binary, but
+ * keeps essential system directories so shell invocations still work.
+ *
+ * On win32 we must keep at minimum:
+ *   - The directory containing cmd.exe (typically C:\Windows\System32)
+ *   - The directory containing node.exe (so child processes resolve correctly)
+ *
+ * On POSIX we can keep any directory that does NOT contain a `mkdocs` binary.
+ *
+ * Shared by cli.spec.ts and integration.spec.ts (previously duplicated).
+ */
+export function buildMkdocsAbsentPath(): string {
+  const sep = platform === "win32" ? ";" : ":";
+  const originalDirs = (process.env["PATH"] ?? "").split(sep);
+
+  const filtered = originalDirs.filter((dir) => {
+    if (!dir) return false;
+    try {
+      if (existsSync(join(dir, "mkdocs"))) return false;
+      if (existsSync(join(dir, "mkdocs.exe"))) return false;
+      if (existsSync(join(dir, "mkdocs.cmd"))) return false;
+      if (existsSync(join(dir, "mkdocs.bat"))) return false;
+    } catch {
+      // If we can't check, keep the dir (conservative)
+    }
+    return true;
+  });
+
+  return filtered.join(sep);
+}
+
+/**
+ * Detect whether a real `mkdocs` binary is reachable on the current PATH.
+ * Used to gate mkdocs-dependent tests (F1/F2/F3 exit-code and process-tree
+ * behavior) so they run for real wherever mkdocs is installed but do not
+ * fail CI environments where it is not.
+ */
+export function isMkdocsAvailable(): boolean {
+  try {
+    const r = spawnSync("mkdocs", ["--version"], {
+      shell: platform === "win32",
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
 }

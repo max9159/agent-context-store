@@ -5,11 +5,10 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { platform } from "node:process";
 import net from "node:net";
 import { spawn } from "node:child_process";
-import { makeTempDir, cleanupTempDir, runCli, exists, readText, cliPath } from "./helpers.ts";
-import { buildRendererJs } from "../packages/cli/dist/index.js";
+import { makeTempDir, cleanupTempDir, runCli, exists, readText, cliPath, withTempProject, buildMkdocsAbsentPath } from "./helpers.ts";
+import { buildRendererJs, formatHostForUrl } from "../packages/cli/dist/index.js";
 import { generateMkdocsWorkspace } from "../packages/cli/dist/docs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -895,6 +894,57 @@ describe("generateMkdocsWorkspace writes only site-docs/, leaves artifacts/ pris
   });
 });
 
+// ─── Finding F6: docs_dir / site_name are quoted YAML scalars ────────────────
+//
+// An unquoted plain scalar containing " #" (legal in a Windows/POSIX path
+// segment, e.g. "D:\repos\proj #1\") is truncated at the comment marker by
+// any YAML parser, including MkDocs's. Both values must be emitted as
+// double-quoted scalars so the full path round-trips.
+
+describe("generateMkdocsWorkspace quotes docs_dir/site_name for paths containing ' #' (F6)", () => {
+  let parentDir: string;
+  let storeDir: string;
+
+  before(async () => {
+    parentDir = makeTempDir("acs-cli-mkdocs-hash-");
+    storeDir = join(parentDir, "proj #1");
+    const { mkdir: mkdirAsync } = await import("node:fs/promises");
+    await mkdirAsync(join(storeDir, "artifacts"), { recursive: true });
+  });
+
+  after(() => cleanupTempDir(parentDir));
+
+  test("docs_dir is double-quoted and round-trips the full ' #' path segment", async () => {
+    await generateMkdocsWorkspace(storeDir);
+    const content = await readFile(join(storeDir, "site-docs", "mkdocs.yml"), "utf8");
+    const docsDirLine = content.split("\n").find((line) => line.startsWith("docs_dir:"));
+    assert.ok(docsDirLine, `expected a docs_dir line; got: ${content}`);
+    assert.ok(
+      docsDirLine!.includes("proj #1"),
+      `docs_dir must include the full "proj #1" segment, not be truncated at the comment marker; got: ${docsDirLine}`
+    );
+    assert.ok(
+      docsDirLine!.trim().startsWith('docs_dir: "') && docsDirLine!.trim().endsWith('"'),
+      `docs_dir value must be a double-quoted YAML scalar; got: ${docsDirLine}`
+    );
+  });
+
+  test("site_name is also double-quoted and round-trips a value containing '#'", async () => {
+    await generateMkdocsWorkspace(storeDir, { siteName: "Proj #1 Docs" });
+    const content = await readFile(join(storeDir, "site-docs", "mkdocs.yml"), "utf8");
+    const siteNameLine = content.split("\n").find((line) => line.startsWith("site_name:"));
+    assert.ok(siteNameLine, `expected a site_name line; got: ${content}`);
+    assert.ok(
+      siteNameLine!.includes("Proj #1 Docs"),
+      `site_name must include the full value, not be truncated at the comment marker; got: ${siteNameLine}`
+    );
+    assert.ok(
+      siteNameLine!.trim().startsWith('site_name: "') && siteNameLine!.trim().endsWith('"'),
+      `site_name value must be a double-quoted YAML scalar; got: ${siteNameLine}`
+    );
+  });
+});
+
 // ─── Finding #1: docs port 0 is rejected ─────────────────────────────────────
 //
 // MkDocs has no ephemeral-port mode; port 0 must be rejected before preflight.
@@ -944,11 +994,10 @@ describe("acs site docs --port 0 is rejected (docs engine cannot use ephemeral p
     );
   });
 
-  test("kanban --port 0 is still accepted (ephemeral port mode must stay valid)", () => {
+  test("kanban --port 0 is still accepted (ephemeral port mode must stay valid)", async () => {
     // Port validation for kanban uses parsePortFlag which allows 0.
     // A temp store dir is needed so buildSiteModel doesn't fail.
-    const dir = makeTempDir("acs-kanban-port0-");
-    try {
+    await withTempProject("acs-kanban-port0-", async (dir) => {
       runCli(["init", dir]);
       // We can't easily run a live server synchronously, but we can confirm
       // the argument is not rejected by checking --build-only (which uses the
@@ -956,9 +1005,104 @@ describe("acs site docs --port 0 is rejected (docs engine cannot use ephemeral p
       const r = runCli(["site", "kanban", "--build-only", "--port", "0"], { cwd: dir });
       // --build-only with port 0 is fine: port is parsed (valid) but not used
       assert.equal(r.status, 0, `kanban --port 0 must not be rejected; stderr: ${r.stderr}`);
-    } finally {
-      void cleanupTempDir(dir);
-    }
+    });
+  });
+});
+
+// ─── Finding F5: valueless string flags must error, not silently default ─────
+//
+// The tokenizer stores `--port` followed by another `--flag` (or end of args)
+// as boolean true; getStringFlag returned undefined for it, indistinguishable
+// from the flag being absent, so callers silently fell back to the default.
+// getStringFlagStrict now throws a clear "--flag requires a value" error.
+
+describe("acs site --port/--host/--task without a value errors clearly (F5)", () => {
+  test("kanban --port followed by another flag exits non-zero with a clear error", () => {
+    const r = runCli(["site", "kanban", "--port", "--no-watch"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--port") && combined.includes("requires a value"),
+      `expected a clear --port error; got: ${combined}`
+    );
+  });
+
+  test("kanban --host at end of args exits non-zero with a clear error", () => {
+    const r = runCli(["site", "kanban", "--host"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--host") && combined.includes("requires a value"),
+      `expected a clear --host error; got: ${combined}`
+    );
+  });
+
+  test("kanban --task followed by another flag exits non-zero with a clear error", () => {
+    const r = runCli(["site", "kanban", "--build-only", "--task", "--open"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--task") && combined.includes("requires a value"),
+      `expected a clear --task error; got: ${combined}`
+    );
+  });
+
+  test("docs --port at end of args exits non-zero with a clear error", () => {
+    const r = runCli(["site", "docs", "--port"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--port") && combined.includes("requires a value"),
+      `expected a clear --port error; got: ${combined}`
+    );
+  });
+
+  test("docs --host at end of args exits non-zero with a clear error", () => {
+    const r = runCli(["site", "docs", "--host"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--host") && combined.includes("requires a value"),
+      `expected a clear --host error; got: ${combined}`
+    );
+  });
+
+  test("bare site --kanban-port at end of args exits non-zero with a clear error", () => {
+    const r = runCli(["site", "--kanban-port"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--kanban-port") && combined.includes("requires a value"),
+      `expected a clear --kanban-port error; got: ${combined}`
+    );
+  });
+
+  test("bare site --docs-port at end of args exits non-zero with a clear error", () => {
+    const r = runCli(["site", "--docs-port"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--docs-port") && combined.includes("requires a value"),
+      `expected a clear --docs-port error; got: ${combined}`
+    );
+  });
+
+  test("bare site --task at end of args exits non-zero with a clear error", () => {
+    const r = runCli(["site", "--kanban-port", "0", "--task"]);
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("--task") && combined.includes("requires a value"),
+      `expected a clear --task error; got: ${combined}`
+    );
+  });
+
+  test("--port with an actual value is unaffected (regression guard)", async () => {
+    await withTempProject("acs-f5-port-value-", async (dir) => {
+      runCli(["init", dir]);
+      const r = runCli(["site", "kanban", "--build-only", "--port", "9000"], { cwd: dir });
+      assert.equal(r.status, 0, `--port 9000 must still work; stderr: ${r.stderr}`);
+    });
   });
 });
 
@@ -1021,72 +1165,31 @@ describe("acs site kanban --host rejects metacharacters", () => {
     assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}`);
   });
 
-  test("normal hosts are accepted: localhost", () => {
-    const dir = makeTempDir("acs-host-ok-");
-    try {
+  test("normal hosts are accepted: localhost", async () => {
+    await withTempProject("acs-host-ok-", async (dir) => {
       runCli(["init", dir]);
       // --build-only skips serving so validateHost passes and we get a build
       const r = runCli(["site", "kanban", "--build-only", "--host", "localhost"], { cwd: dir });
       assert.equal(r.status, 0, `localhost must be accepted; stderr: ${r.stderr}`);
-    } finally {
-      void cleanupTempDir(dir);
-    }
+    });
   });
 
-  test("normal hosts are accepted: 127.0.0.1", () => {
-    const dir = makeTempDir("acs-host-ok2-");
-    try {
+  test("normal hosts are accepted: 127.0.0.1", async () => {
+    await withTempProject("acs-host-ok2-", async (dir) => {
       runCli(["init", dir]);
       const r = runCli(["site", "kanban", "--build-only", "--host", "127.0.0.1"], { cwd: dir });
       assert.equal(r.status, 0, `127.0.0.1 must be accepted; stderr: ${r.stderr}`);
-    } finally {
-      void cleanupTempDir(dir);
-    }
+    });
   });
 
-  test("normal hosts are accepted: 0.0.0.0", () => {
-    const dir = makeTempDir("acs-host-ok3-");
-    try {
+  test("normal hosts are accepted: 0.0.0.0", async () => {
+    await withTempProject("acs-host-ok3-", async (dir) => {
       runCli(["init", dir]);
       const r = runCli(["site", "kanban", "--build-only", "--host", "0.0.0.0"], { cwd: dir });
       assert.equal(r.status, 0, `0.0.0.0 must be accepted; stderr: ${r.stderr}`);
-    } finally {
-      void cleanupTempDir(dir);
-    }
+    });
   });
 });
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Build a PATH that omits any directory containing `mkdocs`, but keeps
- * essential system directories so shell invocations still work.
- *
- * On win32 we must keep at minimum:
- *   - The directory containing cmd.exe (typically C:\Windows\System32)
- *   - The directory containing node.exe (so child processes resolve correctly)
- *
- * On POSIX we can keep any directory that does NOT contain a `mkdocs` binary.
- */
-function buildMkdocsAbsentPath(): string {
-  const sep = platform === "win32" ? ";" : ":";
-  const originalDirs = (process.env["PATH"] ?? "").split(sep);
-
-  // Remove directories that contain mkdocs binary
-  const filtered = originalDirs.filter((dir) => {
-    if (!dir) return false;
-    // Check for mkdocs executable in this dir
-    try {
-      if (existsSync(join(dir, "mkdocs"))) return false;
-      if (existsSync(join(dir, "mkdocs.exe"))) return false;
-    } catch {
-      // If we can't check, keep the dir (conservative)
-    }
-    return true;
-  });
-
-  return filtered.join(sep);
-}
 
 // ─── Markdown renderer unit tests ─────────────────────────────────────────────
 
@@ -1186,6 +1289,35 @@ describe("Markdown renderer (buildRendererJs)", () => {
     const html = renderInline("[<evil>](https://example.com)");
     assert.ok(!html.includes("<evil>"), `must escape label: ${html}`);
     assert.ok(html.includes("&lt;evil&gt;"), `expected escaped label: ${html}`);
+  });
+});
+
+// ─── Finding F7: formatHostForUrl brackets IPv6 literals for printed URLs ────
+//
+// http://${host}:${port}/ was built directly from an unbracketed IPv6 host
+// (e.g. "::1"), producing an invalid URL like "http://::1:8000/". A bracketed
+// host must stay bracketed unchanged; a plain hostname/IPv4 must be untouched.
+
+describe("formatHostForUrl (F7)", () => {
+  test("brackets a bare IPv6 literal", () => {
+    assert.equal(formatHostForUrl("::1"), "[::1]");
+  });
+
+  test("brackets a full IPv6 address", () => {
+    assert.equal(formatHostForUrl("2001:db8::1"), "[2001:db8::1]");
+  });
+
+  test("leaves an already-bracketed IPv6 literal unchanged", () => {
+    assert.equal(formatHostForUrl("[::1]"), "[::1]");
+  });
+
+  test("leaves a hostname unchanged", () => {
+    assert.equal(formatHostForUrl("localhost"), "localhost");
+  });
+
+  test("leaves an IPv4 address unchanged", () => {
+    assert.equal(formatHostForUrl("127.0.0.1"), "127.0.0.1");
+    assert.equal(formatHostForUrl("0.0.0.0"), "0.0.0.0");
   });
 });
 

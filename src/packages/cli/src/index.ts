@@ -9,7 +9,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import type { ServerResponse } from "node:http";
 import { select, checkbox, input, confirm } from "@inquirer/prompts";
-import { mkdocsPreflight, generateMkdocsWorkspace, startMkdocsServe, handleSiteDocs } from "./docs.js";
+import { mkdocsPreflight, generateMkdocsWorkspace, startMkdocsServe, handleSiteDocs, type MkdocsHandle } from "./docs.js";
 import {
   approveHandoff,
   buildContextPackage,
@@ -688,6 +688,24 @@ function getStringFlag(args: ParsedArgs, name: string): string | undefined {
 }
 
 /**
+ * Like getStringFlag, but throws a clear error when the flag was supplied
+ * without a value (e.g. `--port --no-watch`, or `--port` at the end of argv).
+ * The tokenizer stores a valueless flag as boolean `true`; getStringFlag
+ * alone returns undefined for that case, indistinguishable from the flag
+ * being absent entirely, so callers would silently fall back to a default
+ * instead of erroring on a mistyped invocation.
+ *
+ * Used for every `acs site` string-valued flag that has a caller-supplied
+ * default: --port, --host, --task, --kanban-port, --docs-port.
+ */
+function getStringFlagStrict(args: ParsedArgs, name: string): string | undefined {
+  if (args.flags[name] === true) {
+    throw new Error(`--${name} requires a value`);
+  }
+  return getStringFlag(args, name);
+}
+
+/**
  * Returns true when the flag is present as boolean true or the string "true".
  * Used for --build-only, --open, --no-watch, etc.
  */
@@ -710,7 +728,7 @@ function parsePortFlag(
   opts: { allowZero?: boolean } = {}
 ): number {
   const allowZero = opts.allowZero ?? true;
-  const raw = getStringFlag(args, name);
+  const raw = getStringFlagStrict(args, name);
   if (raw === undefined) return fallback;
   const n = Number.parseInt(raw, 10);
   const min = allowZero ? 0 : 1;
@@ -754,6 +772,20 @@ function validateHost(host: string, flagName = "--host"): void {
  */
 function unbracketHost(host: string): string {
   return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+/**
+ * Format a host for embedding in a printed/opened URL: `http://<host>:<port>/`.
+ *
+ * An IPv6 literal (e.g. `::1`) MUST be bracketed in a URL per RFC 3986 —
+ * `http://::1:8000/` is not a valid URL (the last `:8000` is ambiguous with
+ * the address itself). validateHost() already accepts the bracketed form
+ * (`[::1]`), so this only adds brackets when they are not already present.
+ * A hostname or IPv4 address (no colon) is returned unchanged.
+ */
+export function formatHostForUrl(host: string): string {
+  if (host.startsWith("[") && host.endsWith("]")) return host;
+  return host.includes(":") ? `[${host}]` : host;
 }
 
 function delay(ms: number): Promise<void> {
@@ -961,7 +993,7 @@ async function handleSite(rest: string[]): Promise<void> {
     // shared validateHost guard before it can reach a shell spawn in docs.ts,
     // and the port goes through the shared parsePortFlag (docs cannot bind 0).
     const args = parseArgs(tail);
-    const host = getStringFlag(args, "host") ?? "127.0.0.1";
+    const host = getStringFlagStrict(args, "host") ?? "127.0.0.1";
     validateHost(host);
     const port = parsePortFlag(args, "port", 8001, { allowZero: false });
     const open = getBoolFlag(args, "open");
@@ -1000,6 +1032,32 @@ interface KanbanBuildResult {
   model: Awaited<ReturnType<typeof buildSiteModel>>;
 }
 
+/**
+ * Write the three STATIC site assets (index.html, assets/site.css,
+ * assets/site.js). These are pure functions of the compiled CLI source, not
+ * of store content — they never change between rebuilds of the same running
+ * process. Written once at build-only / serve startup; NOT rewritten by
+ * every watch-triggered rebuild (see rebuildModelOnly).
+ */
+async function writeStaticSiteAssets(siteDir: string): Promise<void> {
+  await mkdir(path.join(siteDir, "assets"), { recursive: true });
+  await writeFileUtf8(path.join(siteDir, "assets", "site.css"), buildSiteCss());
+  await writeFileUtf8(path.join(siteDir, "assets", "site.js"), buildSiteJs());
+  await writeFileUtf8(path.join(siteDir, "index.html"), buildSiteHtml());
+}
+
+async function writeModelJson(
+  model: Awaited<ReturnType<typeof buildSiteModel>>,
+  siteDir: string
+): Promise<void> {
+  await mkdir(path.join(siteDir, "data"), { recursive: true });
+  await writeFileUtf8(path.join(siteDir, "data", "model.json"), JSON.stringify(model, null, 2));
+}
+
+/**
+ * Full site build: static assets + data/model.json. Used for --build-only
+ * and the initial serve-mode entry (both need the complete site on disk).
+ */
 async function rebuildKanbanSite(
   cwd: string,
   taskFilter?: string
@@ -1008,25 +1066,37 @@ async function rebuildKanbanSite(
   const { storeDir } = model.store;
   const siteDir = path.join(storeDir, "site");
 
-  await mkdir(path.join(siteDir, "assets"), { recursive: true });
-  await mkdir(path.join(siteDir, "data"), { recursive: true });
-
-  await writeFileUtf8(path.join(siteDir, "data", "model.json"), JSON.stringify(model, null, 2));
-  await writeFileUtf8(path.join(siteDir, "assets", "site.css"), buildSiteCss());
-  await writeFileUtf8(path.join(siteDir, "assets", "site.js"), buildSiteJs());
-  await writeFileUtf8(path.join(siteDir, "index.html"), buildSiteHtml());
+  await writeModelJson(model, siteDir);
+  await writeStaticSiteAssets(siteDir);
 
   return { siteDir, storeDir, model };
+}
+
+/**
+ * Lighter rebuild used by the file-watch callback during serve: recomputes
+ * and rewrites ONLY data/model.json. The static assets do not depend on
+ * store content, so rewriting them on every artifact/handoff/audit change is
+ * wasted I/O (site.css/site.js are already on disk from the initial
+ * rebuildKanbanSite() call at serve startup).
+ */
+async function rebuildModelOnly(
+  cwd: string,
+  taskFilter: string | undefined,
+  siteDir: string
+): Promise<Awaited<ReturnType<typeof buildSiteModel>>> {
+  const model = await buildSiteModel(cwd, taskFilter);
+  await writeModelJson(model, siteDir);
+  return model;
 }
 
 // ─── handleSiteKanban ─────────────────────────────────────────────────────────
 
 async function handleSiteKanban(tail: string[]): Promise<void> {
   const args = parseArgs(tail);
-  const taskFilter = getStringFlag(args, "task");
+  const taskFilter = getStringFlagStrict(args, "task");
   const buildOnly = getBoolFlag(args, "build-only");
   const port = parsePortFlag(args, "port", 8000);
-  const host = getStringFlag(args, "host") ?? "127.0.0.1";
+  const host = getStringFlagStrict(args, "host") ?? "127.0.0.1";
   validateHost(host);
   const noWatch = getBoolFlag(args, "no-watch");
   const watch = !noWatch;
@@ -1051,12 +1121,18 @@ async function handleSiteKanban(tail: string[]): Promise<void> {
     return;
   }
 
-  // Serve mode
-  const { siteDir, storeDir } = await rebuildKanbanSite(process.cwd(), taskFilter);
+  // Serve mode — destructure model (as build-only already does) so the
+  // "no artifacts found" notice is printed on initial entry here too. Only
+  // on this first build: the watch callback below intentionally stays quiet
+  // on rebuilds.
+  const { siteDir, storeDir, model } = await rebuildKanbanSite(process.cwd(), taskFilter);
+  if (taskFilter && model.tasks.length === 0) {
+    console.log(`notice no artifacts found for task "${taskFilter}" — site will be empty`);
+  }
 
   const { server, clients, actualPort } = await serveKanban({ siteDir, host, port });
 
-  const url = `http://${host}:${actualPort}/`;
+  const url = `http://${formatHostForUrl(host)}:${actualPort}/`;
   console.log(`OK ACS kanban serving at ${url}`);
 
   if (openBrowser_) {
@@ -1065,7 +1141,7 @@ async function handleSiteKanban(tail: string[]): Promise<void> {
 
   let watcher: { close(): void } | undefined;
   if (watch) {
-    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, () => {
+    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, siteDir, () => {
       broadcastReload(clients);
     });
   }
@@ -1240,11 +1316,41 @@ function watchAndRebuild(
   storeDir: string,
   cwd: string,
   taskFilter: string | undefined,
+  siteDir: string,
   onRebuilt: () => void
 ): { close(): void } {
   const watchers: Array<ReturnType<typeof fsWatch>> = [];
   const dirsToWatch = ["artifacts", "handoffs", "audit"];
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  // In-flight guard: a rebuild slower than the debounce window would
+  // otherwise let overlapping rebuildModelOnly() runs race writes to
+  // data/model.json. `dirty` ensures exactly one follow-up rebuild runs
+  // after the current one finishes, instead of stacking concurrent runs.
+  let rebuilding = false;
+  let dirty = false;
+  let closed = false;
+
+  function runRebuild(): void {
+    if (rebuilding) {
+      dirty = true;
+      return;
+    }
+    rebuilding = true;
+    rebuildModelOnly(cwd, taskFilter, siteDir)
+      .then(() => {
+        onRebuilt();
+      })
+      .catch((err: unknown) => {
+        console.error(`warning rebuild failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        rebuilding = false;
+        if (dirty && !closed) {
+          dirty = false;
+          runRebuild();
+        }
+      });
+  }
 
   for (const sub of dirsToWatch) {
     const dir = path.join(storeDir, sub);
@@ -1252,13 +1358,7 @@ function watchAndRebuild(
     try {
       const w = fsWatch(dir, { recursive: true }, () => {
         if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          rebuildKanbanSite(cwd, taskFilter).then(() => {
-            onRebuilt();
-          }).catch((err: unknown) => {
-            console.error(`warning rebuild failed: ${err instanceof Error ? err.message : String(err)}`);
-          });
-        }, 150);
+        debounceTimer = setTimeout(runRebuild, 150);
       });
       watchers.push(w);
     } catch {
@@ -1268,6 +1368,7 @@ function watchAndRebuild(
 
   return {
     close() {
+      closed = true;
       if (debounceTimer) clearTimeout(debounceTimer);
       for (const w of watchers) {
         try { w.close(); } catch { /* ignore */ }
@@ -1285,11 +1386,11 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
   // kanban engine legitimately uses 0 for OS-assigned ports. allowZero:false
   // enforces the 1–65535 range for docs here (no hand-rolled zero check).
   const docsPort   = parsePortFlag(args, "docs-port", 8001, { allowZero: false });
-  const host       = getStringFlag(args, "host") ?? "127.0.0.1";
+  const host       = getStringFlagStrict(args, "host") ?? "127.0.0.1";
   validateHost(host);
   const noWatch    = getBoolFlag(args, "no-watch");
   const watch      = !noWatch;
-  const taskFilter = getStringFlag(args, "task");
+  const taskFilter = getStringFlagStrict(args, "task");
   const openBrowser_ = getBoolFlag(args, "open");
 
   // Build the Kanban site files first (needed by both paths)
@@ -1298,12 +1399,17 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
   // Check MkDocs BEFORE starting either server so we can report both in the banner.
   // Neither engine's failure blocks the other.
   const docsPresent = await mkdocsPreflight();
-  let docsHandle: { kill(): void; waitForExit(): Promise<number | null> } | undefined;
+  let docsHandle: MkdocsHandle | undefined;
   // Tracks whether the docs child is still alive. startMkdocsServe returns a
   // handle BEFORE the child binds, so a truthy handle alone does not mean docs
   // is running — we must consume waitForExit() to detect an immediate crash
   // (e.g. docs port occupied) instead of hanging with zero live engines.
   let docsAlive = false;
+  // Set BEFORE docsHandle.kill() in the SIGINT cleanup below. The docs
+  // waitForExit() continuation checks this to distinguish an intentional
+  // teardown from a real crash — Windows reports a killed shell child's exit
+  // code as 1, indistinguishable from a real failure by exit code alone.
+  let docsTeardown = false;
 
   // --- Start Kanban engine (try/catch so docs engine still starts on failure) ---
   let kanbanServer: http.Server | undefined;
@@ -1332,6 +1438,10 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
       // than blocking forever in awaitSigint.
       void handle.waitForExit().then((code) => {
         docsAlive = false;
+        // Intentional teardown (SIGINT cleanup already set this flag before
+        // calling docsHandle.kill()) — never print an error or exit(1) for
+        // it, regardless of WHY the child exited.
+        if (docsTeardown) return;
         if (code !== null && code !== 0) {
           console.error(`error docs engine exited with code ${code}`);
         }
@@ -1358,8 +1468,9 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
   }
 
   // --- Print banner ---
-  const kanbanUrl = kanbanServer ? `http://${host}:${kanbanActualPort}/` : null;
-  const docsUrl   = docsAlive   ? `http://${host}:${docsPort}/`         : null;
+  const urlHost = formatHostForUrl(host);
+  const kanbanUrl = kanbanServer ? `http://${urlHost}:${kanbanActualPort}/` : null;
+  const docsUrl   = docsAlive   ? `http://${urlHost}:${docsPort}/`         : null;
 
   if (kanbanUrl && docsUrl) {
     console.log(`OK ACS site running:`);
@@ -1380,7 +1491,7 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
 
   let watcher: { close(): void } | undefined;
   if (watch && kanbanServer && kanbanClients) {
-    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, () => {
+    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, siteDir, () => {
       if (kanbanClients) broadcastReload(kanbanClients);
     });
   }
@@ -1394,7 +1505,10 @@ async function handleSiteBoth(rest: string[]): Promise<void> {
       kanbanClients?.clear();
     }
     if (watcher) watcher.close();
-    if (docsHandle) docsHandle.kill();
+    if (docsHandle) {
+      docsTeardown = true;
+      docsHandle.kill();
+    }
   });
 }
 

@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -11,18 +12,85 @@ import { spawn } from "node:child_process";
 const IS_WIN = process.platform === "win32";
 
 /**
- * When we spawn mkdocs through the shell (win32), Node performs NO argument
- * quoting, so a path containing a space (e.g. C:\Users\John Doe\...) would be
- * split into multiple args and mkdocs would fail. Wrap path-bearing args in
- * double quotes under shell mode. Windows paths cannot contain a double quote,
- * so this is always safe. Under non-shell (POSIX) spawn, arguments are passed
- * verbatim, so no quoting is applied.
+ * Resolved mkdocs invocation target: an absolute (or bare, as last resort)
+ * command plus whether it must be run through a shell.
+ *
+ * `shell: false` is always used on POSIX (unchanged) and for the common
+ * Windows case where mkdocs resolves to a native `.exe`/`.com` launcher
+ * (what `pip`'s console_scripts generate on Windows) — Node can spawn those
+ * directly, so args reach mkdocs verbatim with no shell re-parsing and no
+ * cmd.exe `%VAR%` expansion risk.
+ *
+ * `shell: true` is only used as a fallback when mkdocs resolves to a
+ * `.bat`/`.cmd` shim. Windows/Node cannot spawn a batch file directly without
+ * an interpreter — `spawn(path/to/foo.cmd, args, { shell: false })` throws
+ * EINVAL synchronously (verified on Node 22) — so cmd.exe is unavoidable
+ * there. That fallback is not the common case for a pip install.
  */
-function shellQuote(value: string): string {
-  return IS_WIN ? `"${value}"` : value;
+interface ResolvedMkdocsCommand {
+  command: string;
+  shell: boolean;
 }
 
-interface MkdocsHandle {
+let cachedResolution: ResolvedMkdocsCommand | undefined;
+
+/**
+ * Locate the mkdocs executable on PATH. Cached for the process lifetime
+ * (PATH is not expected to change mid-run) so preflight and every spawn
+ * agree on the exact same resolved target.
+ */
+function resolveMkdocsCommand(): ResolvedMkdocsCommand {
+  if (!IS_WIN) {
+    return { command: "mkdocs", shell: false };
+  }
+  if (cachedResolution) return cachedResolution;
+
+  const dirs = (process.env["PATH"] ?? process.env["Path"] ?? "").split(path.delimiter).filter(Boolean);
+
+  // Prefer a native, directly-spawnable launcher.
+  for (const dir of dirs) {
+    for (const name of ["mkdocs.exe", "mkdocs.com"]) {
+      const candidate = path.join(dir, name);
+      if (existsSync(candidate)) {
+        cachedResolution = { command: candidate, shell: false };
+        return cachedResolution;
+      }
+    }
+  }
+
+  // Fall back to a batch/cmd shim if that is all that is on PATH (some
+  // conda/pipx installs). This still requires cmd.exe as the interpreter.
+  for (const dir of dirs) {
+    for (const name of ["mkdocs.cmd", "mkdocs.bat"]) {
+      const candidate = path.join(dir, name);
+      if (existsSync(candidate)) {
+        cachedResolution = { command: candidate, shell: true };
+        return cachedResolution;
+      }
+    }
+  }
+
+  // Not found on PATH at all. mkdocsPreflight() (which uses this same
+  // resolution) will report absence before any spawn is attempted in the
+  // normal flow, so this is only reached if PATH changed after preflight.
+  cachedResolution = { command: "mkdocs", shell: true };
+  return cachedResolution;
+}
+
+/**
+ * Quote an argument for the rare shell:true (batch-shim) fallback path.
+ * Windows paths cannot contain a double quote, so this is always safe.
+ * NOTE: this does NOT suppress cmd.exe `%VAR%` expansion — quoting a string
+ * for cmd.exe prevents whitespace/redirection re-parsing but does not
+ * disable percent-expansion, which is a property of cmd.exe's own parser.
+ * This is a documented residual limitation of the batch-shim fallback only;
+ * the common (.exe) path above is immune to it entirely.
+ */
+function batchQuote(value: string): string {
+  return `"${value}"`;
+}
+
+export interface MkdocsHandle {
   kill(): void;
   waitForExit(): Promise<number | null>;
 }
@@ -41,8 +109,13 @@ interface SpawnMkdocsOpts {
  * resolves with the child's exit code (or null on spawn error).
  */
 function spawnMkdocs(args: string[], opts: SpawnMkdocsOpts = {}): MkdocsHandle {
-  const child = spawn("mkdocs", args, {
-    shell: IS_WIN,
+  const resolved = resolveMkdocsCommand();
+  const spawnArgs = resolved.shell ? args.map(batchQuote) : args;
+  // shell:true means cmd.exe re-parses the whole command line, so the resolved
+  // shim path (which may live under a directory with spaces) needs quoting too.
+  const command = resolved.shell ? batchQuote(resolved.command) : resolved.command;
+  const child = spawn(command, spawnArgs, {
+    shell: resolved.shell,
     stdio: [opts.stdin ?? "inherit", "pipe", "pipe"],
   });
 
@@ -87,12 +160,16 @@ function spawnMkdocs(args: string[], opts: SpawnMkdocsOpts = {}): MkdocsHandle {
  * Run `mkdocs --version` to detect if MkDocs is present on PATH.
  * Resolves true on exit-code 0, false for any failure (including ENOENT).
  *
- * On win32 we spawn through the shell so `mkdocs.exe` is found via PATH/Scripts.
+ * Uses the same resolveMkdocsCommand() resolution as every other mkdocs
+ * spawn so preflight and the actual serve/build invocation agree on exactly
+ * which binary is being run.
  */
 export function mkdocsPreflight(): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawn("mkdocs", ["--version"], {
-      shell: IS_WIN,
+    const resolved = resolveMkdocsCommand();
+    const args = resolved.shell ? ["--version"].map(batchQuote) : ["--version"];
+    const child = spawn(resolved.command, args, {
+      shell: resolved.shell,
       stdio: "ignore",
     });
     child.on("error", () => resolve(false));
@@ -107,6 +184,18 @@ export interface MkdocsWorkspaceOpts {
 export interface MkdocsWorkspaceResult {
   configPath: string;
   docsDir: string;
+}
+
+/**
+ * Quote a value as a double-quoted YAML plain scalar, escaping backslashes
+ * and double quotes. Without this, a value containing ` #` (a legal path
+ * segment on Windows and POSIX, e.g. `D:\repos\proj #1\`) would be truncated
+ * by YAML's unquoted-scalar comment rule — `#` only starts a comment when
+ * preceded by whitespace, but an unquoted scalar has no other protection.
+ */
+function yamlQuote(value: string): string {
+  const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `"${escaped}"`;
 }
 
 /**
@@ -131,8 +220,8 @@ export async function generateMkdocsWorkspace(
   const docsDirPosix = docsDir.split(path.sep).join("/");
 
   const yml = [
-    `site_name: ${siteName}`,
-    `docs_dir: ${docsDirPosix}`,
+    `site_name: ${yamlQuote(siteName)}`,
+    `docs_dir: ${yamlQuote(docsDirPosix)}`,
     "theme:",
     "  name: material",
     "  palette:",
@@ -182,6 +271,8 @@ export interface HandleSiteDocsOptions {
  *
  * Returns a Promise that resolves when the docs engine is done (either
  * `--build-only` finishes or `mkdocs serve` exits / SIGINT is received).
+ * Rejects if `mkdocs serve` exits with a non-zero code that was NOT caused
+ * by our own SIGINT-triggered kill (see runMkdocsServe).
  */
 export async function handleSiteDocs(opts: HandleSiteDocsOptions): Promise<void> {
   const { buildOnly, host, port, open, storeDir } = opts;
@@ -206,13 +297,31 @@ export async function handleSiteDocs(opts: HandleSiteDocsOptions): Promise<void>
 }
 
 /**
+ * Build the `mkdocs serve` argument list. Shared by runMkdocsServe (foreground,
+ * `acs site docs`) and startMkdocsServe (background, `acs site` both-engines
+ * mode) so the two invocations can never drift apart.
+ */
+function buildServeArgs(configPath: string, host: string, port: number, open: boolean): string[] {
+  const args = ["serve", "--dev-addr", `${host}:${port}`, "-f", configPath];
+  if (open) args.push("--open");
+  return args;
+}
+
+/**
  * Spawn `mkdocs serve` (foreground) and forward output with a `[docs]` prefix.
  * Wires SIGINT to kill the child and removes the listener on the child's own
  * exit so no listener leaks (which would otherwise try to kill an already-dead
  * child on a later SIGINT).
  *
  * When `open` is set, `--open` is forwarded to mkdocs so it opens the browser.
- * Returns a Promise that resolves when the child exits.
+ *
+ * Returns a Promise that resolves when the child exits with code 0 OR when
+ * our own SIGINT handler killed it intentionally (a Windows-killed shell
+ * child commonly reports exit code 1, which must NOT be treated as a real
+ * failure). Rejects (throws) when the child exits non-zero for any other
+ * reason — e.g. the configured port is already bound, or a broken config —
+ * mirroring runMkdocsBuild's behavior so main()'s catch sets exit code 1
+ * instead of silently exiting 0.
  */
 export function runMkdocsServe(
   configPath: string,
@@ -220,24 +329,25 @@ export function runMkdocsServe(
   port: number,
   open: boolean
 ): Promise<void> {
-  const args = [
-    "serve",
-    "--dev-addr",
-    shellQuote(`${host}:${port}`),
-    "-f",
-    shellQuote(configPath),
-  ];
-  if (open) args.push("--open");
+  const args = buildServeArgs(configPath, host, port, open);
 
   const handle = spawnMkdocs(args, { stdin: "inherit" });
 
+  let killedByUs = false;
   const onSigint = () => {
+    killedByUs = true;
     handle.kill();
   };
   process.once("SIGINT", onSigint);
 
-  return handle.waitForExit().then(() => {
+  return handle.waitForExit().then((code) => {
     process.off("SIGINT", onSigint);
+    // Our own SIGINT-triggered kill() is never a failure — Windows reports a
+    // killed shell child's exit code as 1, which would otherwise look
+    // indistinguishable from a real crash.
+    if (killedByUs) return;
+    if (code === 0) return;
+    throw new Error(`mkdocs serve exited with code ${code ?? "null"}`);
   });
 }
 
@@ -251,9 +361,9 @@ export function runMkdocsBuild(
   const args = [
     "build",
     "-f",
-    shellQuote(configPath),
+    configPath,
     "-d",
-    shellQuote(outputDir),
+    outputDir,
   ];
 
   const handle = spawnMkdocs(args, { stdin: "inherit" });
@@ -280,14 +390,8 @@ export function startMkdocsServe(
   configPath: string,
   host: string,
   port: number
-): { kill(): void; waitForExit(): Promise<number | null> } {
-  const args = [
-    "serve",
-    "--dev-addr",
-    shellQuote(`${host}:${port}`),
-    "-f",
-    shellQuote(configPath),
-  ];
+): MkdocsHandle {
+  const args = buildServeArgs(configPath, host, port, false);
 
   return spawnMkdocs(args, { stdin: "ignore" });
 }

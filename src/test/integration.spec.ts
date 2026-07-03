@@ -20,9 +20,10 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import http from "node:http";
+import net from "node:net";
 import {
   makeTempDir,
   cleanupTempDir,
@@ -32,6 +33,8 @@ import {
   readText,
   isolatedEnv,
   cliPath,
+  buildMkdocsAbsentPath,
+  isMkdocsAvailable,
 } from "./helpers.ts";
 
 function localBaseDir(envDir: string): string {
@@ -645,6 +648,237 @@ describe("Scenario: acs validate clean after site-docs / site-docs/ isolation", 
   });
 });
 
+// ─── Scenario 9: F1 — acs site docs exits non-zero when mkdocs serve fails ───
+//
+// runMkdocsServe previously resolved unconditionally regardless of the
+// child's exit code, so a port conflict or broken config exited 0. These
+// tests spawn the REAL mkdocs binary (gated on isMkdocsAvailable()) and
+// occupy the docs port first, so mkdocs itself fails fast with a bind error.
+
+describe("Scenario: F1 — acs site docs propagates a non-zero mkdocs serve exit code", () => {
+  let dir: string;
+  let occupiedPort: number;
+  let sentinel: net.Server;
+
+  before(async () => {
+    dir = makeTempDir("acs-int-docs-f1-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    occupiedPort = await new Promise<number>((resolve) => {
+      sentinel = net.createServer();
+      sentinel.listen(0, "127.0.0.1", () => {
+        const addr = sentinel.address();
+        resolve(typeof addr === "object" && addr !== null ? addr.port : 0);
+      });
+    });
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => { sentinel.close(() => resolve()); });
+    await cleanupTempDir(dir);
+  });
+
+  test("exits non-zero (not 0) when the docs port is already bound", (t) => {
+    if (!isMkdocsAvailable()) {
+      t.skip("mkdocs is not installed on PATH in this environment");
+      return;
+    }
+    const r = runCli(["site", "docs", "--port", String(occupiedPort)], { cwd: dir });
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("mkdocs serve exited with code"),
+      `expected the mkdocs-serve-failed error message; output: ${combined}`
+    );
+  });
+});
+
+// ─── Scenario 10: F3 — mkdocs is spawned directly (no shell) and its port is
+// released after the acs process is terminated ────────────────────────────
+//
+// Verifies resolveMkdocsCommand() finds and launches the real mkdocs binary
+// (previously spawned via a cmd.exe shell on win32, which left mkdocs bound
+// to the port as an orphan when only the immediate cmd.exe child was
+// killed). Gated on isMkdocsAvailable().
+
+describe("Scenario: F3 — mkdocs serve binds successfully and releases its port on teardown", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-docs-f3-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  test("acs site docs serve binds the configured port and frees it after termination", async (t) => {
+    if (!isMkdocsAvailable()) {
+      t.skip("mkdocs is not installed on PATH in this environment");
+      return;
+    }
+    const port = await getEphemeralPort();
+
+    const child = spawn(process.execPath, [cliPath, "site", "docs", "--port", String(port)], {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (c: Buffer) => { out += String(c); });
+    child.stderr.on("data", (c: Buffer) => { out += String(c); });
+
+    // Wait for mkdocs's own "Serving on" line — proves the resolved binary
+    // actually launched and bound the port (not silently failing).
+    await new Promise<void>((resolve, reject) => {
+      const iv = setInterval(() => {
+        if (/serving on/i.test(out)) { clearInterval(iv); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(iv); reject(new Error(`Timed out waiting for mkdocs to serve.\noutput: ${out}`)); }, 15_000);
+    });
+
+    // Confirm the port is genuinely bound while mkdocs is up.
+    await new Promise<void>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", () => resolve()); // EADDRINUSE — good, mkdocs holds it
+      probe.listen(port, "127.0.0.1", () => { probe.close(() => resolve()); });
+    });
+
+    // Terminate the acs process (Windows has no real signals — kill() always
+    // forcefully terminates — see child_process docs) and confirm the port
+    // is free again shortly after, i.e. mkdocs was not left orphaned.
+    child.kill();
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+      setTimeout(resolve, 5000);
+    });
+
+    let portFreed = false;
+    for (let i = 0; i < 20; i += 1) {
+      const free = await new Promise<boolean>((resolve) => {
+        const probe = net.createServer();
+        probe.once("error", () => resolve(false));
+        probe.listen(port, "127.0.0.1", () => { probe.close(() => resolve(true)); });
+      });
+      if (free) { portFreed = true; break; }
+      await sleep(250);
+    }
+    assert.ok(portFreed, `expected docs port ${port} to be released after termination — mkdocs was orphaned`);
+  });
+});
+
+// ─── Scenario 11: F8 — kanban serve mode prints the "no artifacts" notice on
+// initial entry when --task filters to zero tasks ─────────────────────────
+
+describe("Scenario: F8 — kanban serve prints the no-artifacts notice on initial entry", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-kanban-f8-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "F8-001", "--title", "F8 SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  test("acs site kanban --task <nonexistent> prints the notice before the serving banner", async () => {
+    await withKanbanServerCustom(
+      dir,
+      ["site", "kanban", "--port", "0", "--no-watch", "--task", "TASK-DOES-NOT-EXIST"],
+      {},
+      async (_baseUrl, stdout) => {
+        assert.ok(
+          stdout.includes("notice") && stdout.includes("no artifacts"),
+          `expected the "no artifacts found" notice on initial serve entry; stdout: ${stdout}`
+        );
+        return 0;
+      }
+    );
+  });
+});
+
+// ─── Scenario 12: C2 — watch-triggered rebuilds only rewrite data/model.json ──
+//
+// The static site assets (index.html, assets/site.css, assets/site.js) are
+// pure functions of the compiled CLI source, not of store content. A
+// watch-triggered rebuild (new artifact created while serving) must rewrite
+// ONLY data/model.json, not re-generate the three constant files every time.
+
+describe("Scenario: C2 — watch rebuild only rewrites data/model.json", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-watch-c2-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  test("creating an artifact while serving updates model.json but leaves index.html/site.css/site.js untouched", async () => {
+    await withKanbanServerCustom(dir, ["site", "kanban", "--port", "0"], {}, async () => {
+      const siteDir = join(dir, ".acs", "site");
+      const htmlPath = join(siteDir, "index.html");
+      const cssPath = join(siteDir, "assets", "site.css");
+      const jsPath = join(siteDir, "assets", "site.js");
+      const modelPath = join(siteDir, "data", "model.json");
+
+      const before = {
+        html: (await stat(htmlPath)).mtimeMs,
+        css: (await stat(cssPath)).mtimeMs,
+        js: (await stat(jsPath)).mtimeMs,
+      };
+      const modelBefore = await readText(modelPath);
+
+      // Trigger a watched change (writes under artifacts/, which watchAndRebuild watches)
+      assert.equal(
+        runCli(["new", "srs", "--task", "C2-001", "--title", "C2 SRS"], { cwd: dir }).status,
+        0
+      );
+
+      // Poll for the debounced rebuild (150ms) to pick up the new task.
+      let modelAfter = modelBefore;
+      for (let i = 0; i < 20; i += 1) {
+        modelAfter = await readText(modelPath);
+        if (modelAfter.includes("C2-001")) break;
+        await sleep(200);
+      }
+      assert.ok(
+        modelAfter.includes("C2-001"),
+        `expected model.json to include the new task after the watch rebuild; got: ${modelAfter.slice(0, 300)}`
+      );
+      assert.notEqual(modelAfter, modelBefore, "model.json content should change after the watch rebuild");
+
+      const after = {
+        html: (await stat(htmlPath)).mtimeMs,
+        css: (await stat(cssPath)).mtimeMs,
+        js: (await stat(jsPath)).mtimeMs,
+      };
+      assert.equal(after.html, before.html, "index.html must not be rewritten by a watch-triggered rebuild");
+      assert.equal(after.css, before.css, "assets/site.css must not be rewritten by a watch-triggered rebuild");
+      assert.equal(after.js, before.js, "assets/site.js must not be rewritten by a watch-triggered rebuild");
+
+      return 0;
+    });
+  });
+});
+
+/**
+ * Grab a free ephemeral port by briefly binding a throwaway server. There is
+ * an inherent (tiny) race between releasing this port and the caller binding
+ * it, acceptable for test purposes — the same technique used implicitly by
+ * `--port 0` elsewhere in this suite.
+ */
+function getEphemeralPort(): Promise<number> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
 // ─── Shared helpers for serve tests ──────────────────────────────────────────
 
 interface HttpResult {
@@ -879,26 +1113,4 @@ async function collectMarkdownFiles(dirPath: string): Promise<string[]> {
     }
   }
   return results;
-}
-
-/**
- * Build a PATH that omits directories containing mkdocs,
- * but keeps system/node directories for shell resolution.
- */
-function buildMkdocsAbsentPath(): string {
-  const sep = platform === "win32" ? ";" : ":";
-  const originalDirs = (process.env["PATH"] ?? "").split(sep);
-
-  const filtered = originalDirs.filter((d) => {
-    if (!d) return false;
-    try {
-      if (existsSync(join(d, "mkdocs"))) return false;
-      if (existsSync(join(d, "mkdocs.exe"))) return false;
-    } catch {
-      // keep on error
-    }
-    return true;
-  });
-
-  return filtered.join(sep);
 }
