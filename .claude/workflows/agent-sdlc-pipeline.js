@@ -21,17 +21,28 @@ export const meta = {
 //   analysisVectors  string[]  Analyze fan-out dimensions (read-only research)
 //   designLenses     string[]  Design Review fan-out lenses
 //   codeLenses       string[]  Code Review fan-out lenses
+//
+// NOTE: args may be delivered as a JSON string; parsed into `A` below.
 // ---------------------------------------------------------------------------
 const STAGES = ['analyze', 'design-review', 'develop', 'code-review']
-const START = (args && args.startStage) || 'analyze'
+// args may arrive as a JSON-encoded string instead of an object depending on
+// the invoker — normalize before reading any field, otherwise startStage etc.
+// silently read as undefined and the run fails fast at the analyze guard.
+const A = (() => {
+  if (typeof args === 'string') {
+    try { return JSON.parse(args) } catch { return {} }
+  }
+  return args || {}
+})()
+const START = A.startStage || 'analyze'
 const startIdx = STAGES.indexOf(START)
 if (startIdx < 0) throw new Error(`Invalid startStage "${START}". Expected one of ${STAGES.join(', ')}.`)
 
-const REQ = (args && args.requirement) || ''
-const DOC = (args && args.designDocPath) || 'docs/fixes/pipeline-design.md'
-const MAX_DESIGN = (args && args.maxDesignRounds) || 5
-const MAX_DEV = (args && args.maxDevRounds) || 5
-const REPO = (args && args.repoDir) ? `\nRepo working dir: ${args.repoDir}` : ''
+const REQ = A.requirement || ''
+const DOC = A.designDocPath || 'docs/fixes/pipeline-design.md'
+const MAX_DESIGN = A.maxDesignRounds || 5
+const MAX_DEV = A.maxDevRounds || 5
+const REPO = A.repoDir ? `\nRepo working dir: ${A.repoDir}` : ''
 
 if (START === 'analyze' && !REQ) {
   throw new Error('startStage "analyze" requires args.requirement (what to build).')
@@ -46,14 +57,14 @@ function normalizeList(list, fallback) {
       : x,
   )
 }
-const ANALYSIS_VECTORS = normalizeList(args && args.analysisVectors, [
+const ANALYSIS_VECTORS = normalizeList(A.analysisVectors, [
   'requirements and scope',
   'existing-code reuse and architecture fit',
   'storage, migration, and path semantics',
   'public API and CLI contract, backward compatibility',
   'edge cases, failure modes, and test strategy',
 ])
-const DESIGN_LENSES = normalizeList(args && args.designLenses, [
+const DESIGN_LENSES = normalizeList(A.designLenses, [
   'correctness and logic conflicts',
   'public API / CLI contract and backward compatibility',
   'storage, migration, and path semantics',
