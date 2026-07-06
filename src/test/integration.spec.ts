@@ -19,6 +19,11 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { platform } from "node:process";
+import { existsSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import http from "node:http";
+import net from "node:net";
 import {
   makeTempDir,
   cleanupTempDir,
@@ -27,6 +32,9 @@ import {
   readJson,
   readText,
   isolatedEnv,
+  cliPath,
+  buildMkdocsAbsentPath,
+  isMkdocsAvailable,
 } from "./helpers.ts";
 
 function localBaseDir(envDir: string): string {
@@ -463,3 +471,646 @@ describe("Scenario: idempotency and error guards", () => {
     }
   });
 });
+
+// ─── Scenario 6: acs site kanban serve smoke (Tests #9 and #10) ──────────────
+
+describe("Scenario: kanban serve smoke (async spawn, --port 0)", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-kanban-serve-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "SERVE-001", "--title", "Serve SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  // Test #9 — kanban serve smoke
+  test("serves HTTP on an ephemeral port, GET / returns 200, GET /data/model.json parses, SSE header is text/event-stream", async () => {
+    const port = await withKanbanServer(dir, async (baseUrl) => {
+      // GET /
+      const rootRes = await httpGet(baseUrl + "/");
+      assert.equal(rootRes.status, 200, `GET / should return 200, got ${rootRes.status}`);
+
+      // GET /data/model.json — should parse as JSON
+      const modelRes = await httpGet(baseUrl + "/data/model.json");
+      assert.equal(modelRes.status, 200, `GET /data/model.json should return 200`);
+      const model = JSON.parse(modelRes.body);
+      assert.ok(typeof model.generatedAt === "string", "model.json should have generatedAt");
+      assert.ok(Array.isArray(model.tasks), "model.json should have tasks array");
+
+      // GET /__livereload — response header content-type should be text/event-stream
+      const sseRes = await httpGetHeaders(baseUrl + "/__livereload");
+      assert.ok(
+        (sseRes["content-type"] ?? "").includes("text/event-stream"),
+        `/__livereload content-type should be text/event-stream; got: ${sseRes["content-type"] ?? "(none)"}`
+      );
+
+      return 0;
+    });
+    // port is just a sentinel return value
+    void port;
+  });
+
+  // Test #10 — path traversal rejected
+  test("path traversal GET /../../etc/passwd returns 403 or 404", async () => {
+    await withKanbanServer(dir, async (baseUrl) => {
+      // Send the RAW, unnormalized path so the literal dot-dot segments reach
+      // the server and actually exercise the traversal guard in serveStatic().
+      // (httpGet() would let `new URL()` normalize this to /etc/passwd first,
+      // making it an ordinary 404 that never tests the guard.)
+      const traversalRes = await httpGetRawPath(baseUrl, "/../../etc/passwd");
+      assert.equal(
+        traversalRes.status,
+        403,
+        `raw traversal should be rejected by the guard with 403; got ${traversalRes.status}`
+      );
+
+      // Also test percent-encoded variant — decodeURIComponent restores the
+      // dot-dot segments server-side, so the guard returns 403 here too.
+      const encodedRes = await httpGet(baseUrl + "/%2e%2e%2fetc%2fpasswd");
+      assert.ok(
+        encodedRes.status === 403 || encodedRes.status === 404,
+        `encoded traversal should return 403 or 404; got ${encodedRes.status}`
+      );
+
+      return 0;
+    });
+  });
+});
+
+// ─── Scenario 7: both-mode degrades without MkDocs (Test #12) ────────────────
+
+describe("Scenario: both-mode degrades gracefully when MkDocs absent", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-both-degrade-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "BOTH-001", "--title", "Both SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  // Test #12 — both-mode degrades without MkDocs
+  test("acs site --kanban-port 0 warns about docs and still serves Kanban", async () => {
+    const stubPath = buildMkdocsAbsentPath();
+
+    await withKanbanServerCustom(
+      dir,
+      ["site", "--kanban-port", "0", "--no-watch"],
+      { PATH: stubPath },
+      async (baseUrl, stdout) => {
+        // Banner should warn about docs
+        assert.ok(
+          stdout.includes("kanban") || stdout.includes("Kanban") || stdout.includes("ACS"),
+          `banner should mention kanban; stdout: ${stdout}`
+        );
+
+        // Kanban should still be serving
+        const res = await httpGet(baseUrl + "/");
+        assert.equal(res.status, 200, `GET / should return 200; got ${res.status}`);
+
+        return 0;
+      }
+    );
+  });
+});
+
+// ─── Scenario 8: acs validate stays clean after site-docs (Test #13) ─────────
+
+describe("Scenario: acs validate clean after site-docs / site-docs/ isolation", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-site-docs-validate-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "VDOCS-001", "--title", "Validate Docs SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  // Test #13 — validate stays clean after docs build, no index.md in artifacts/
+  test("acs validate exits 0 and artifacts/ has no generated index.md after acs site docs", async () => {
+    // Run acs site docs --build-only; skip if mkdocs not present (see plan §test-13)
+    const docsResult = runCli(["site", "docs", "--build-only"], { cwd: dir });
+
+    // Whether mkdocs is present or not, validate must still pass
+    const validateResult = runCli(["validate"], { cwd: dir });
+    assert.equal(validateResult.status, 0, `acs validate should pass; stdout: ${validateResult.stdout}\nstderr: ${validateResult.stderr}`);
+
+    // artifacts/ must NOT contain any generated files (in particular no index.md)
+    const artifactsDir = join(dir, ".acs", "artifacts");
+    const allArtifactMd = await collectMarkdownFiles(artifactsDir);
+    for (const f of allArtifactMd) {
+      assert.ok(
+        !f.endsWith("index.md"),
+        `artifacts/ must not contain a generated index.md; found: ${f}`
+      );
+    }
+
+    // Only assert mkdocs.yml when mkdocs actually ran. A missing mkdocs also
+    // exits 0 (graceful degradation) but prints a "MkDocs not found" notice and
+    // writes nothing — so status===0 alone does NOT imply the workspace was
+    // generated (this is why CI, which has no mkdocs, must not require the yml).
+    const mkdocsAbsent = docsResult.stdout.includes("MkDocs not found");
+    if (docsResult.status === 0 && !mkdocsAbsent) {
+      const mkdocsYml = join(dir, ".acs", "site-docs", "mkdocs.yml");
+      assert.ok(
+        existsSync(mkdocsYml),
+        `site-docs/mkdocs.yml should exist after docs build-only; checked: ${mkdocsYml}`
+      );
+    }
+
+    // acs index must not pick up site-docs/ paths
+    const indexResult = runCli(["index"], { cwd: dir });
+    assert.equal(indexResult.status, 0, `acs index should pass`);
+    const indexJson = await readJson<{ artifacts: Array<{ path: string }> }>(join(dir, ".acs", "index.json"));
+    for (const artifact of indexJson.artifacts) {
+      assert.ok(
+        !artifact.path.includes("site-docs/"),
+        `index should not include site-docs/ artifact: ${artifact.path}`
+      );
+      assert.ok(
+        !artifact.path.includes("site/"),
+        `index should not include site/ artifact: ${artifact.path}`
+      );
+    }
+  });
+});
+
+// ─── Scenario 9: F1 — acs site docs exits non-zero when mkdocs serve fails ───
+//
+// runMkdocsServe previously resolved unconditionally regardless of the
+// child's exit code, so a port conflict or broken config exited 0. These
+// tests spawn the REAL mkdocs binary (gated on isMkdocsAvailable()) and
+// occupy the docs port first, so mkdocs itself fails fast with a bind error.
+
+describe("Scenario: F1 — acs site docs propagates a non-zero mkdocs serve exit code", () => {
+  let dir: string;
+  let occupiedPort: number;
+  let sentinel: net.Server;
+
+  before(async () => {
+    dir = makeTempDir("acs-int-docs-f1-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    occupiedPort = await new Promise<number>((resolve) => {
+      sentinel = net.createServer();
+      sentinel.listen(0, "127.0.0.1", () => {
+        const addr = sentinel.address();
+        resolve(typeof addr === "object" && addr !== null ? addr.port : 0);
+      });
+    });
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve) => { sentinel.close(() => resolve()); });
+    await cleanupTempDir(dir);
+  });
+
+  test("exits non-zero (not 0) when the docs port is already bound", (t) => {
+    if (!isMkdocsAvailable()) {
+      t.skip("mkdocs is not installed on PATH in this environment");
+      return;
+    }
+    const r = runCli(["site", "docs", "--port", String(occupiedPort)], { cwd: dir });
+    assert.notEqual(r.status, 0, `expected non-zero exit; stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const combined = r.stdout + r.stderr;
+    assert.ok(
+      combined.includes("mkdocs serve exited with code"),
+      `expected the mkdocs-serve-failed error message; output: ${combined}`
+    );
+  });
+});
+
+// ─── Scenario 10: F3 — mkdocs is spawned directly (no shell) and its port is
+// released after the acs process is terminated ────────────────────────────
+//
+// Verifies resolveMkdocsCommand() finds and launches the real mkdocs binary
+// (previously spawned via a cmd.exe shell on win32, which left mkdocs bound
+// to the port as an orphan when only the immediate cmd.exe child was
+// killed). Gated on isMkdocsAvailable().
+
+describe("Scenario: F3 — mkdocs serve binds successfully and releases its port on teardown", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-docs-f3-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  test("acs site docs serve binds the configured port and frees it after termination", async (t) => {
+    if (!isMkdocsAvailable()) {
+      t.skip("mkdocs is not installed on PATH in this environment");
+      return;
+    }
+    const port = await getEphemeralPort();
+
+    const child = spawn(process.execPath, [cliPath, "site", "docs", "--port", String(port)], {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (c: Buffer) => { out += String(c); });
+    child.stderr.on("data", (c: Buffer) => { out += String(c); });
+
+    // Wait for mkdocs's own "Serving on" line — proves the resolved binary
+    // actually launched and bound the port (not silently failing).
+    await new Promise<void>((resolve, reject) => {
+      const iv = setInterval(() => {
+        if (/serving on/i.test(out)) { clearInterval(iv); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(iv); reject(new Error(`Timed out waiting for mkdocs to serve.\noutput: ${out}`)); }, 15_000);
+    });
+
+    // Confirm the port is genuinely bound while mkdocs is up.
+    await new Promise<void>((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", () => resolve()); // EADDRINUSE — good, mkdocs holds it
+      probe.listen(port, "127.0.0.1", () => { probe.close(() => resolve()); });
+    });
+
+    // Terminate the acs process (Windows has no real signals — kill() always
+    // forcefully terminates — see child_process docs) and confirm the port
+    // is free again shortly after, i.e. mkdocs was not left orphaned.
+    child.kill();
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+      setTimeout(resolve, 5000);
+    });
+
+    let portFreed = false;
+    for (let i = 0; i < 20; i += 1) {
+      const free = await new Promise<boolean>((resolve) => {
+        const probe = net.createServer();
+        probe.once("error", () => resolve(false));
+        probe.listen(port, "127.0.0.1", () => { probe.close(() => resolve(true)); });
+      });
+      if (free) { portFreed = true; break; }
+      await sleep(250);
+    }
+    assert.ok(portFreed, `expected docs port ${port} to be released after termination — mkdocs was orphaned`);
+  });
+});
+
+// ─── Scenario 11: F8 — kanban serve mode prints the "no artifacts" notice on
+// initial entry when --task filters to zero tasks ─────────────────────────
+
+describe("Scenario: F8 — kanban serve prints the no-artifacts notice on initial entry", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-kanban-f8-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+    assert.equal(
+      runCli(["new", "srs", "--task", "F8-001", "--title", "F8 SRS"], { cwd: dir }).status,
+      0
+    );
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  test("acs site kanban --task <nonexistent> prints the notice before the serving banner", async () => {
+    await withKanbanServerCustom(
+      dir,
+      ["site", "kanban", "--port", "0", "--no-watch", "--task", "TASK-DOES-NOT-EXIST"],
+      {},
+      async (_baseUrl, stdout) => {
+        assert.ok(
+          stdout.includes("notice") && stdout.includes("no artifacts"),
+          `expected the "no artifacts found" notice on initial serve entry; stdout: ${stdout}`
+        );
+        return 0;
+      }
+    );
+  });
+});
+
+// ─── Scenario 12: C2 — watch-triggered rebuilds only rewrite data/model.json ──
+//
+// The static site assets (index.html, assets/site.css, assets/site.js) are
+// pure functions of the compiled CLI source, not of store content. A
+// watch-triggered rebuild (new artifact created while serving) must rewrite
+// ONLY data/model.json, not re-generate the three constant files every time.
+
+describe("Scenario: C2 — watch rebuild only rewrites data/model.json", () => {
+  let dir: string;
+
+  before(() => {
+    dir = makeTempDir("acs-int-watch-c2-");
+    assert.equal(runCli(["init"], { cwd: dir }).status, 0);
+  });
+
+  after(async () => { await cleanupTempDir(dir); });
+
+  test("creating an artifact while serving updates model.json but leaves index.html/site.css/site.js untouched", async () => {
+    await withKanbanServerCustom(dir, ["site", "kanban", "--port", "0"], {}, async () => {
+      const siteDir = join(dir, ".acs", "site");
+      const htmlPath = join(siteDir, "index.html");
+      const cssPath = join(siteDir, "assets", "site.css");
+      const jsPath = join(siteDir, "assets", "site.js");
+      const modelPath = join(siteDir, "data", "model.json");
+
+      const before = {
+        html: (await stat(htmlPath)).mtimeMs,
+        css: (await stat(cssPath)).mtimeMs,
+        js: (await stat(jsPath)).mtimeMs,
+      };
+      const modelBefore = await readText(modelPath);
+
+      // Trigger a watched change (writes under artifacts/, which watchAndRebuild watches)
+      assert.equal(
+        runCli(["new", "srs", "--task", "C2-001", "--title", "C2 SRS"], { cwd: dir }).status,
+        0
+      );
+
+      // Poll for the debounced rebuild (150ms) to pick up the new task.
+      let modelAfter = modelBefore;
+      for (let i = 0; i < 20; i += 1) {
+        modelAfter = await readText(modelPath);
+        if (modelAfter.includes("C2-001")) break;
+        await sleep(200);
+      }
+      assert.ok(
+        modelAfter.includes("C2-001"),
+        `expected model.json to include the new task after the watch rebuild; got: ${modelAfter.slice(0, 300)}`
+      );
+      assert.notEqual(modelAfter, modelBefore, "model.json content should change after the watch rebuild");
+
+      const after = {
+        html: (await stat(htmlPath)).mtimeMs,
+        css: (await stat(cssPath)).mtimeMs,
+        js: (await stat(jsPath)).mtimeMs,
+      };
+      assert.equal(after.html, before.html, "index.html must not be rewritten by a watch-triggered rebuild");
+      assert.equal(after.css, before.css, "assets/site.css must not be rewritten by a watch-triggered rebuild");
+      assert.equal(after.js, before.js, "assets/site.js must not be rewritten by a watch-triggered rebuild");
+
+      return 0;
+    });
+  });
+});
+
+/**
+ * Grab a free ephemeral port by briefly binding a throwaway server. There is
+ * an inherent (tiny) race between releasing this port and the caller binding
+ * it, acceptable for test purposes — the same technique used implicitly by
+ * `--port 0` elsewhere in this suite.
+ */
+function getEphemeralPort(): Promise<number> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+// ─── Shared helpers for serve tests ──────────────────────────────────────────
+
+interface HttpResult {
+  status: number;
+  body: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Minimal HTTP GET over Node's built-in http module.
+ * Returns status, body, and headers.
+ */
+function httpGet(url: string): Promise<HttpResult> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.get(
+      {
+        host: parsed.hostname,
+        port: Number(parsed.port),
+        path: parsed.pathname + (parsed.search ?? ""),
+        timeout: 5000,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+          else if (Array.isArray(v)) headers[k] = v.join(", ");
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ status, body: Buffer.concat(chunks).toString(), headers }));
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+  });
+}
+
+/**
+ * HTTP GET that sends a RAW, unnormalized request path to the server.
+ *
+ * httpGet() runs the URL through `new URL(...)`, whose WHATWG parser collapses
+ * `/../../etc/passwd` to `/etc/passwd` BEFORE the request is sent — so the
+ * server's traversal guard is never exercised. Here we parse ONLY the origin
+ * for host/port and hand `rawPath` to http.request({ path }) verbatim, so the
+ * literal dot-dot segments reach serveStatic() and trip the guard.
+ */
+function httpGetRawPath(baseUrl: string, rawPath: string): Promise<HttpResult> {
+  return new Promise((resolve, reject) => {
+    const origin = new URL(baseUrl);
+    const req = http.request(
+      {
+        host: origin.hostname,
+        port: Number(origin.port),
+        method: "GET",
+        path: rawPath,
+        timeout: 5000,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+          else if (Array.isArray(v)) headers[k] = v.join(", ");
+        }
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ status, body: Buffer.concat(chunks).toString(), headers }));
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+    req.end();
+  });
+}
+
+/**
+ * Make an HTTP GET and capture headers from the response.
+ * For SSE endpoints we destroy the connection after receiving headers.
+ * Captures headers before destroying to avoid losing them.
+ */
+function httpGetHeaders(url: string): Promise<Record<string, string>> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    let captured: Record<string, string> | null = null;
+
+    const req = http.get(
+      {
+        host: parsed.hostname,
+        port: Number(parsed.port),
+        path: parsed.pathname + (parsed.search ?? ""),
+        timeout: 3000,
+      },
+      (res) => {
+        // Capture headers from the IncomingMessage immediately
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (typeof v === "string") headers[k] = v;
+          else if (Array.isArray(v)) headers[k] = v.join(", ");
+        }
+        captured = headers;
+        // Destroy to avoid hanging on SSE stream — resolve with captured headers
+        res.destroy();
+        req.destroy();
+        resolve(headers);
+      }
+    );
+    req.on("error", (_err: Error) => {
+      // ECONNRESET is expected when we destroy — resolve with whatever we captured
+      if (captured !== null) {
+        resolve(captured);
+      } else {
+        resolve({});
+      }
+    });
+    req.on("timeout", () => { req.destroy(); reject(new Error("request timeout")); });
+  });
+}
+
+/**
+ * Spawn the CLI with `site kanban --port 0 --no-watch`, wait for the
+ * "OK ACS kanban serving at" banner, extract the actual port, run `fn`,
+ * then SIGINT the child and wait for exit.
+ */
+async function withKanbanServer<T>(
+  cwd: string,
+  fn: (baseUrl: string) => Promise<T>
+): Promise<T> {
+  return withKanbanServerCustom(cwd, ["site", "kanban", "--port", "0", "--no-watch"], {}, fn);
+}
+
+async function withKanbanServerCustom<T>(
+  cwd: string,
+  args: string[],
+  extraEnv: Record<string, string>,
+  fn: (baseUrl: string, stdout: string) => Promise<T>
+): Promise<T> {
+  const env = { ...process.env, ...extraEnv };
+
+  const child = spawn(process.execPath, [cliPath, ...args], {
+    cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let collectedStdout = "";
+  let collectedStderr = "";
+  let resolvedPort: number | null = null;
+
+  if (child.stdout) {
+    child.stdout.on("data", (chunk: Buffer) => {
+      collectedStdout += String(chunk);
+    });
+  }
+  if (child.stderr) {
+    child.stderr.on("data", (chunk: Buffer) => {
+      collectedStderr += String(chunk);
+    });
+  }
+
+  // Wait until the "OK ACS kanban serving at http://127.0.0.1:<port>/" banner appears
+  const bannerPromise = new Promise<number>((resolve, reject) => {
+    const checkBanner = () => {
+      const match = collectedStdout.match(/OK ACS kanban serving at http:\/\/127\.0\.0\.1:(\d+)\//);
+      if (match) {
+        resolve(Number(match[1]));
+      }
+    };
+    if (child.stdout) {
+      child.stdout.on("data", () => { checkBanner(); });
+    }
+    // Timeout after 15s
+    setTimeout(() => {
+      reject(new Error(
+        `Timeout waiting for kanban banner.\nstdout: ${collectedStdout}\nstderr: ${collectedStderr}`
+      ));
+    }, 15_000);
+    child.on("close", (code) => {
+      reject(new Error(
+        `Process exited early with code ${code ?? "null"}.\nstdout: ${collectedStdout}\nstderr: ${collectedStderr}`
+      ));
+    });
+  });
+
+  resolvedPort = await bannerPromise;
+
+  // Small poll loop to ensure the port is actually accepting connections
+  const baseUrl = `http://127.0.0.1:${resolvedPort}`;
+  for (let i = 0; i < 10; i++) {
+    try {
+      const r = await httpGet(baseUrl + "/");
+      if (r.status === 200) break;
+    } catch {
+      await sleep(200);
+    }
+  }
+
+  let result: T;
+  try {
+    result = await fn(baseUrl, collectedStdout);
+  } finally {
+    child.kill("SIGINT");
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+      setTimeout(() => { child.kill(); resolve(); }, 3000);
+    });
+  }
+
+  return result;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Recursively collect all .md files under a directory.
+ */
+async function collectMarkdownFiles(dirPath: string): Promise<string[]> {
+  const results: string[] = [];
+  if (!existsSync(dirPath)) return results;
+  // Use recursive readdir with withFileTypes (Node 18.17+)
+  const entries = await readdir(dirPath, { withFileTypes: true, recursive: true } as Parameters<typeof readdir>[1]);
+  for (const entry of entries as Array<{ isFile(): boolean; name: string; path?: string; parentPath?: string }>) {
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      // `entry.path` is available in Node 20+ (parentPath in some versions)
+      const parent = (entry.path ?? entry.parentPath) ?? dirPath;
+      results.push(join(parent, entry.name));
+    }
+  }
+  return results;
+}

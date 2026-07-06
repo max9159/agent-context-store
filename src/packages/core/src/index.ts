@@ -115,6 +115,55 @@ export interface StoreInfo {
   schemasPresent: boolean;
 }
 
+// ─── Static site model types ─────────────────────────────────────────────────
+
+export type KanbanState = "Entry" | "BA" | "SA" | "DEV" | "QA" | "Blocked" | "Done";
+
+export interface SiteHandoff {
+  id: string;
+  taskId: string;
+  fromRole: string;
+  toRole: string;
+  status: string;
+  approvalStatus: string;
+  path: string;
+}
+
+export interface SiteTask {
+  taskId: string;
+  rolesWithArtifacts: string[];
+  artifactCount: number;
+  handoffCount: number;
+  suggestedNextRole: string;
+  kanbanState: KanbanState;
+  /** "pending" when a handoff awaits approval; surfaced as a card badge, not a column. */
+  reviewStatus: "pending" | "none";
+  /** Target role of the pending handoff, used to label the badge (e.g. "Pending SA"). */
+  pendingToRole?: string;
+  validationState: "valid" | "blocked" | "unknown";
+  artifacts: ArtifactRecord[];
+  handoffs: SiteHandoff[];
+  timeline: AuditLogEvent[];
+  nextActionsByRole: Record<string, { suggestedOutputs: string[]; suggestedCommands: string[] }>;
+}
+
+export interface SiteModel {
+  generatedAt: string;
+  store: StoreInfo;
+  validation: ValidationResult;
+  tasks: SiteTask[];
+  artifacts: ArtifactRecord[];
+  handoffs: SiteHandoff[];
+}
+
+export interface DeriveKanbanStateOptions {
+  rolesWithArtifacts: string[];
+  validationErrors: string[];
+  hasApprovedQaSignoff: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface InitOptions {
   /** Project root for in-repo/local modes; store root for dedicated mode. */
   rootDir: string;
@@ -183,6 +232,19 @@ export interface ListHandoffsOptions {
   rootDir: string;
   taskId?: string;
   role?: string;
+}
+
+export interface ApproveHandoffOptions {
+  rootDir: string;
+  /** Handoff id or path (mutually exclusive with fromRole/toRole/taskId). */
+  handoffRef?: string;
+  fromRole?: string;
+  toRole?: string;
+  taskId?: string;
+  reviewer?: string;
+  /** ISO string; omit to use new Date().toISOString(). Inject for deterministic tests. */
+  reviewedAt?: string;
+  mode?: AcsMode;
 }
 
 export interface ValidateScopeOptions {
@@ -784,16 +846,30 @@ export async function explainRole(options: ExplainRoleOptions): Promise<RoleExpl
   };
 }
 
-export async function getNextActions(options: NextActionsOptions): Promise<NextActionsResult> {
-  const policy = await loadPolicy(options.rootDir);
+interface NextActionsCoreOptions {
+  policy: AcsPolicy;
+  artifacts: ArtifactRecord[];
+  role: string;
+  taskId: string;
+  mode?: AcsMode;
+}
+
+/**
+ * Pure core of getNextActions: given an already-loaded policy and an
+ * already-resolved artifact list for the task, compute the next-actions
+ * result with no I/O. getNextActions (single-task CLI calls) and
+ * buildSiteModel (N tasks x all workflow stages) both call this so the
+ * policy load + artifact-tree walk happen exactly once per call site
+ * instead of once per (stage, task) pair.
+ */
+function computeNextActionsCore(options: NextActionsCoreOptions): NextActionsResult {
+  const { policy, artifacts, taskId } = options;
   const role = canonicalRole(policy, options.role);
   const stage = policy.workflow.stages.find((item) => item.owner === role);
   if (!stage) {
     throw new Error(`No workflow stage found for role "${options.role}"`);
   }
   const mode: AcsMode = options.mode ?? "strict";
-  const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
-  const artifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
   const foundTypes = new Set(artifacts.map((artifact) => canonicalArtifactType(policy, artifact.type)));
   const requiredInputs = stage.inputs.map((type) => ({ type, found: foundTypes.has(type) }));
   const profile = findRole(policy, role);
@@ -804,7 +880,7 @@ export async function getNextActions(options: NextActionsOptions): Promise<NextA
   if (isEntry && mode === "relaxed") {
     hints.push({
       for: "ai",
-      message: `No artifacts exist for task "${options.taskId}". You are the entry role. First create the synthetic entry handoff: acs handoff create --from system --to ${role} --task ${options.taskId} --mode relaxed`
+      message: `No artifacts exist for task "${taskId}". You are the entry role. First create the synthetic entry handoff: acs handoff create --from system --to ${role} --task ${taskId} --mode relaxed`
     });
   }
   if (missingInputs.length > 0 && mode === "strict") {
@@ -816,18 +892,25 @@ export async function getNextActions(options: NextActionsOptions): Promise<NextA
 
   return {
     role,
-    taskId: options.taskId,
+    taskId,
     currentStage: stage.name,
     requiredInputs,
     suggestedOutputs: stage.outputs,
     suggestedCommands: [
-      `acs package --role ${role} --task ${options.taskId}`,
-      ...stage.outputs.map((type) => `acs ${role} new ${type} --task ${options.taskId}`),
-      ...(profile?.handoffTargets ?? []).map((target) => `acs handoff create --from ${role} --to ${target} --task ${options.taskId}`)
+      `acs package --role ${role} --task ${taskId}`,
+      ...stage.outputs.map((type) => `acs ${role} new ${type} --task ${taskId}`),
+      ...(profile?.handoffTargets ?? []).map((target) => `acs handoff create --from ${role} --to ${target} --task ${taskId}`)
     ],
     mode,
     ...(hints.length > 0 ? { hints } : {})
   };
+}
+
+export async function getNextActions(options: NextActionsOptions): Promise<NextActionsResult> {
+  const policy = await loadPolicy(options.rootDir);
+  const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
+  const artifacts = await findArtifactsForTask(storeDir, projectDir, options.taskId);
+  return computeNextActionsCore({ policy, artifacts, role: options.role, taskId: options.taskId, mode: options.mode });
 }
 
 export async function createArtifact(options: CreateArtifactOptions): Promise<AcsResult & { artifactPath: string; artifactId: string }> {
@@ -1150,6 +1233,117 @@ export async function listHandoffs(options: ListHandoffsOptions): Promise<string
     .map((file) => toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, file))));
 }
 
+/**
+ * Set (or append) a top-level scalar key in a YAML string without re-serializing
+ * the entire document. Only operates on zero-indented top-level keys (^key:),
+ * so nested keys like readiness.dor_status are never affected.
+ * - If the key already exists: replaces the first matching top-level line.
+ * - If the key does not exist: appends "key: value" at the end.
+ */
+function setYamlScalarLine(content: string, key: string, value: string): string {
+  // Escape regex metacharacters in key so callers with special-char keys don't corrupt the pattern.
+  // All current callers (approval_status, status, reviewed_at, reviewer) are safe, but this is defensive.
+  const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^(${safeKey}):[ \\t]*.*$`, "m");
+  if (pattern.test(content)) {
+    // Use a function replacement so `$` sequences in `value` (e.g. $&, $$, $1)
+    // are treated literally and never expanded as replacement patterns.
+    return content.replace(pattern, (_m, k) => `${k}: ${value}`);
+  }
+  // Append — ensure content ends with a newline before appending
+  const base = content.endsWith("\n") ? content : content + "\n";
+  return `${base}${key}: ${value}\n`;
+}
+
+export async function approveHandoff(
+  options: ApproveHandoffOptions
+): Promise<AcsResult & { handoffPath: string; handoffId: string; approvalStatus: "approved" }> {
+  const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
+
+  // Step 2: Resolve handoff reference
+  let resolvedRef: string;
+  if (options.handoffRef) {
+    resolvedRef = options.handoffRef;
+  } else {
+    if (!options.fromRole || !options.toRole || !options.taskId) {
+      throw new Error("Must provide handoffRef or all of fromRole, toRole, and taskId.");
+    }
+    const policy = await loadPolicy(options.rootDir);
+    const from = canonicalRole(policy, options.fromRole).toUpperCase();
+    const to = canonicalRole(policy, options.toRole).toUpperCase();
+    resolvedRef = `HOFF-${options.taskId}-${from}-${to}`;
+  }
+
+  const handoffPath = resolveHandoffPath(storeDir, projectDir, resolvedRef);
+  if (!handoffPath) {
+    throw new Error(`Handoff not found: ${resolvedRef}`);
+  }
+
+  // Step 3: Read + parse + idempotent short-circuit BEFORE strict validation
+  let content = await readFile(handoffPath, "utf8");
+  const parsed = parseYamlObject(content);
+  const currentApprovalStatus = parsed["approval_status"];
+  const yamlTaskId = typeof parsed["task_id"] === "string" ? parsed["task_id"] : undefined;
+  const handoffId = typeof parsed["id"] === "string" ? parsed["id"] : path.basename(handoffPath, ".yaml");
+  const resultPath = toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, handoffPath)));
+
+  if (currentApprovalStatus === "approved") {
+    return {
+      ...emptyResult(),
+      handoffPath: resultPath,
+      handoffId,
+      approvalStatus: "approved",
+      warnings: ["Handoff is already approved — no changes made."]
+    };
+  }
+
+  // Step 4: Strict validation (only for not-yet-approved handoffs)
+  const mode: AcsMode = options.mode ?? "strict";
+  const validation = await checkHandoff(options.rootDir, resolvedRef);
+  if (!validation.valid) {
+    if (mode === "strict") {
+      throw new Error(`Handoff validation failed:\n${validation.errors.join("\n")}`);
+    }
+    // relaxed: downgrade errors to warnings — still proceed
+  }
+
+  // Step 5: Compute reviewedAt and rewrite YAML
+  const reviewedAt = options.reviewedAt ?? new Date().toISOString();
+  content = setYamlScalarLine(content, "approval_status", "approved");
+  content = setYamlScalarLine(content, "status", "approved");
+  content = setYamlScalarLine(content, "reviewed_at", reviewedAt);
+  if (options.reviewer) {
+    content = setYamlScalarLine(content, "reviewer", options.reviewer);
+  }
+  await writeFile(handoffPath, content, "utf8");
+
+  // Step 6: Append audit
+  const taskIdForAudit = yamlTaskId ?? options.taskId;
+  await appendAudit(storeDir, {
+    action: "handoff.approve",
+    ts: reviewedAt,
+    from: typeof parsed["from_role"] === "string" ? parsed["from_role"] : options.fromRole,
+    to: typeof parsed["to_role"] === "string" ? parsed["to_role"] : options.toRole,
+    task_id: taskIdForAudit,
+    handoff: handoffId,
+    ...(options.reviewer ? { reviewer: options.reviewer } : {}),
+    reviewed_at: reviewedAt,
+    mode
+  });
+
+  // Step 7: Return
+  return {
+    ...emptyResult(),
+    handoffPath: resultPath,
+    handoffId,
+    approvalStatus: "approved",
+    updated: [resultPath],
+    ...(mode === "relaxed" && !validation.valid
+      ? { warnings: validation.errors.map((e) => `relaxed: ${e}`) }
+      : {})
+  };
+}
+
 export async function buildContextPackage(options: BuildContextPackageOptions): Promise<AcsResult & { packagePath: string }> {
   const { projectDir, storeDir } = resolveStoreContext(options.rootDir);
   assertSafePathSegment(options.taskId, "task id");
@@ -1353,6 +1547,192 @@ export async function buildIndex(rootDirInput: string): Promise<AcsResult & { ar
 
 export async function doctor(rootDirInput: string): Promise<ValidationResult> {
   return validateContextStore(rootDirInput);
+}
+
+/**
+ * Derive the Kanban state for a task.
+ *
+ * Rules (applied in precedence order):
+ * 1. Blocked — any validation errors exist (overrides all other states)
+ * 2. Done    — QA has artifacts AND has approved signoff AND no errors
+ * 3. Role stage based on the highest role that has artifacts
+ * 4. Entry   — no roles have artifacts
+ *
+ * Note: handoff approval status (pending/approved) is surfaced as a per-card
+ * badge (see SiteTask.reviewStatus), not as a Kanban column, so a task under
+ * review still shows in the column of the role that owns its artifacts.
+ */
+export function deriveKanbanState(options: DeriveKanbanStateOptions): KanbanState {
+  const { rolesWithArtifacts, validationErrors, hasApprovedQaSignoff } = options;
+  const hasErrors = validationErrors.length > 0;
+
+  // Blocked takes precedence over all other states when errors exist
+  if (hasErrors) {
+    return "Blocked";
+  }
+
+  // Done: QA has artifacts and approved signoff and no errors
+  if (rolesWithArtifacts.includes("qa") && hasApprovedQaSignoff) {
+    return "Done";
+  }
+
+  // Role-stage precedence: last role in pipeline wins
+  const roleOrder = ["qa", "dev", "sa", "ba"];
+  for (const role of roleOrder) {
+    if (rolesWithArtifacts.includes(role)) {
+      return role.toUpperCase() as KanbanState;
+    }
+  }
+
+  return "Entry";
+}
+
+/**
+ * Build a static site model aggregating existing ACS store state.
+ * Optionally filter to a single task with `taskFilter`.
+ */
+export async function buildSiteModel(rootDirInput: string, taskFilter?: string): Promise<SiteModel> {
+  const storeInfo = await getStoreInfo(rootDirInput);
+  const { storeDir, projectDir } = resolveStoreContext(rootDirInput);
+  const validation = await validateContextStore(rootDirInput);
+  const policy = await loadPolicy(rootDirInput);
+
+  // Collect all task IDs from artifacts (using frontmatter task_id as truth)
+  const allArtifacts = validation.artifacts;
+  const taskIdsSet = new Set(allArtifacts.map((a) => a.taskId).filter((id) => id.length > 0));
+
+  // Apply task filter
+  const taskIds = taskFilter
+    ? [...taskIdsSet].filter((id) => id === taskFilter)
+    : [...taskIdsSet];
+
+  // Build handoff list from filesystem
+  const handoffPaths = await listFiles(path.join(storeDir, "handoffs"), ".yaml");
+  const siteHandoffs: SiteHandoff[] = [];
+  for (const handoffPath of handoffPaths) {
+    try {
+      const content = await readFile(handoffPath, "utf8");
+      const data = parseYamlObject(content);
+      const taskIdValue = String(data["task_id"] ?? "");
+      if (taskFilter && taskIdValue !== taskFilter) continue;
+      siteHandoffs.push({
+        id: String(data["id"] ?? path.basename(handoffPath, ".yaml")),
+        taskId: taskIdValue,
+        fromRole: String(data["from_role"] ?? ""),
+        toRole: String(data["to_role"] ?? ""),
+        status: String(data["status"] ?? ""),
+        approvalStatus: String(data["approval_status"] ?? ""),
+        path: toResultPath(storeDir, projectDir, toPosix(path.relative(storeDir, handoffPath)))
+      });
+    } catch {
+      // skip malformed handoffs
+    }
+  }
+
+  // Build per-task data
+  const siteTasks: SiteTask[] = [];
+  for (const taskId of taskIds.sort()) {
+    const taskArtifacts = allArtifacts.filter((a) => a.taskId === taskId);
+    const taskHandoffs = siteHandoffs.filter((h) => h.taskId === taskId);
+
+    // Determine roles with artifacts
+    const ownerSet = new Set<string>();
+    for (const artifact of taskArtifacts) {
+      const def = findArtifactDefinition(policy, canonicalArtifactType(policy, artifact.type));
+      if (def && def.owner !== "system") {
+        ownerSet.add(def.owner);
+      }
+    }
+    const rolesWithArtifacts = [...ownerSet];
+
+    // Validation errors scoped to this task's artifacts
+    const taskArtifactPaths = new Set(taskArtifacts.map((a) => a.path));
+    const taskErrors = validation.errors.filter((e) => [...taskArtifactPaths].some((ap) => e.includes(ap)));
+
+    // Check for approved QA signoff
+    const hasApprovedQaSignoff = taskArtifacts.some(
+      (a) => a.type === "qa-signoff" && a.approvalStatus === "approved"
+    );
+
+    // Check for any pending-approval handoff for this task. When multiple
+    // pending handoffs exist for one task, select the frontier: the one whose
+    // toRole is furthest along the pipeline (highest pipeline-order index).
+    // This is deterministic regardless of file/lexical order.
+    const pipelineOrder = ["ba", "sa", "dev", "qa"];
+    const pendingHandoffs = taskHandoffs.filter(
+      (h) => h.approvalStatus === "pending" || h.approvalStatus === "pending_approval"
+    );
+    const pendingHandoff = pendingHandoffs.length === 0
+      ? undefined
+      : pendingHandoffs.reduce((best, h) => {
+          const bestIdx = pipelineOrder.indexOf(best.toRole.toLowerCase());
+          const hIdx = pipelineOrder.indexOf(h.toRole.toLowerCase());
+          // Roles not in the list get index -1, which sorts last
+          return hIdx > bestIdx ? h : best;
+        });
+    const reviewStatus: "pending" | "none" = pendingHandoff ? "pending" : "none";
+    const pendingToRole = pendingHandoff?.toRole || undefined;
+
+    const kanbanState = deriveKanbanState({ rolesWithArtifacts, validationErrors: taskErrors, hasApprovedQaSignoff });
+
+    // Timeline from audit log
+    let timeline: AuditLogEvent[] = [];
+    try {
+      timeline = await readTaskLog({ rootDir: rootDirInput, taskId });
+    } catch {
+      timeline = [];
+    }
+
+    // Next actions by role (for the core roles). Uses the pure
+    // computeNextActionsCore helper with the policy and artifacts already
+    // loaded above — avoids re-running loadPolicy + findArtifactsForTask
+    // once per (stage, task) pair on every rebuild.
+    const nextActionsByRole: Record<string, { suggestedOutputs: string[]; suggestedCommands: string[] }> = {};
+    for (const stage of policy.workflow.stages) {
+      try {
+        const next = computeNextActionsCore({ policy, artifacts: taskArtifacts, role: stage.owner, taskId, mode: "relaxed" });
+        nextActionsByRole[stage.owner] = {
+          suggestedOutputs: next.suggestedOutputs,
+          suggestedCommands: next.suggestedCommands
+        };
+      } catch {
+        // skip if role not found
+      }
+    }
+
+    // Determine suggested next role
+    const { suggestedNextRole } = computeNextRole(ownerSet, policy.workflow.stages);
+
+    siteTasks.push({
+      taskId,
+      rolesWithArtifacts,
+      artifactCount: taskArtifacts.length,
+      handoffCount: taskHandoffs.length,
+      suggestedNextRole,
+      kanbanState,
+      reviewStatus,
+      pendingToRole,
+      validationState: taskErrors.length > 0 ? "blocked" : "valid",
+      artifacts: taskArtifacts,
+      handoffs: taskHandoffs,
+      timeline,
+      nextActionsByRole
+    });
+  }
+
+  // Apply task filter to artifacts as well
+  const filteredArtifacts = taskFilter
+    ? allArtifacts.filter((a) => a.taskId === taskFilter)
+    : allArtifacts;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    store: storeInfo,
+    validation,
+    tasks: siteTasks,
+    artifacts: filteredArtifacts,
+    handoffs: siteHandoffs
+  };
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -2531,6 +2911,65 @@ export async function readTaskLog(options: ReadTaskLogOptions): Promise<AuditLog
   return events;
 }
 
+/**
+ * Compute the role that should act next for a task.
+ *
+ * Semantics: the first stage AFTER the last stage that already has artifacts
+ * whose owner has NO artifacts yet — i.e. forward continuation from the
+ * task's furthest confirmed progress. Never suggests going backwards to an
+ * earlier, deliberately-skipped stage (relaxed mode allows entering the
+ * workflow mid-stream, e.g. at SA with no BA artifacts).
+ *
+ * Correctly handles a role owning multiple non-contiguous stages, including
+ * a workflow that lists the same owner more than once (e.g. a duplicate
+ * tail "sa" review stage).
+ */
+export function computeNextRole(
+  ownerSet: ReadonlySet<string>,
+  stages: ReadonlyArray<{ owner: string }>
+): { suggestedNextRole: string; isEntry: boolean } {
+  if (ownerSet.size === 0) {
+    return { suggestedNextRole: "any", isEntry: true };
+  }
+
+  // Canonical pipeline order: dedupe stages by owner, keeping only the FIRST
+  // occurrence. Anchoring "how far the task has progressed" on this deduped
+  // sequence prevents a LATER duplicate occurrence of an already-encountered
+  // owner from being mistaken for further progress than has actually
+  // happened (e.g. ownerSet {ba, sa, dev} on [ba, sa, dev, qa, sa] must
+  // anchor on dev, not on the later duplicate sa).
+  const seenOwners = new Set<string>();
+  const uniqueStages: Array<{ owner: string }> = [];
+  for (const stage of stages) {
+    if (!seenOwners.has(stage.owner)) {
+      seenOwners.add(stage.owner);
+      uniqueStages.push(stage);
+    }
+  }
+
+  // Anchor: the LAST stage (in canonical order) whose owner already has
+  // artifacts. Suggestions only look FORWARD from this anchor.
+  let lastOwnedIndex = -1;
+  for (let i = 0; i < uniqueStages.length; i += 1) {
+    if (ownerSet.has(uniqueStages[i].owner)) {
+      lastOwnedIndex = i;
+    }
+  }
+
+  for (let i = lastOwnedIndex + 1; i < uniqueStages.length; i += 1) {
+    if (!ownerSet.has(uniqueStages[i].owner)) {
+      return { suggestedNextRole: uniqueStages[i].owner, isEntry: false };
+    }
+  }
+
+  // Every stage in the canonical order already has an owner with artifacts —
+  // fall back to the owner of the LAST stage in the ORIGINAL (non-deduped)
+  // list, which correctly surfaces a duplicate tail owner (e.g. a final "sa"
+  // review stage) rather than the deduped tail.
+  const last = stages[stages.length - 1];
+  return { suggestedNextRole: last?.owner ?? "ba", isEntry: false };
+}
+
 export async function getTasksOverview(rootDirInput: string): Promise<TaskOverview[]> {
   const { projectDir, storeDir } = resolveStoreContext(rootDirInput);
   const policy = await loadPolicy(rootDirInput);
@@ -2557,23 +2996,7 @@ export async function getTasksOverview(rootDirInput: string): Promise<TaskOvervi
         owners.add(def.owner);
       }
     }
-    let suggestedNextRole = stages[0]?.owner ?? "ba";
-    let isEntry = false;
-    if (owners.size === 0) {
-      suggestedNextRole = "any";
-      isEntry = true;
-    } else {
-      // Find the latest stage whose owner has artifacts and pick its next stage.
-      let lastIdx = -1;
-      stages.forEach((stage, idx) => {
-        if (owners.has(stage.owner)) lastIdx = idx;
-      });
-      if (lastIdx >= 0 && lastIdx + 1 < stages.length) {
-        suggestedNextRole = stages[lastIdx + 1]!.owner;
-      } else if (lastIdx >= 0) {
-        suggestedNextRole = stages[lastIdx]!.owner;
-      }
-    }
+    const { suggestedNextRole, isEntry } = computeNextRole(owners, stages);
     result.push({
       taskId,
       rolesWithArtifacts: [...owners],

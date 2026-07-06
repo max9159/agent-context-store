@@ -1,58 +1,116 @@
 <!-- This file is generated from ../../../README.md by scripts/sync-cli-readme.mjs. Do not edit directly. -->
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/max9159/agent-context-store)
+
 # Agent Context Store
 
-Agent Context Store (`acs`) is a Git-backed, schema-validated handoff toolkit that gives each AI agent role (BA, SA, Dev, QA) a structured way to produce, validate, and pass SDLC artifacts to the next role.
+Agent Context Store (`acs`) is a Git-backed handoff toolkit for BA, SA, Dev, and QA agents to produce validated SDLC artifacts — SRS, design docs, ADRs, API specs, test plans — and relay them through confirmed handoff records. Works with Cursor, Claude Code, Codex, CI, and custom runtimes.
 
-Each role agent writes schema-validated documents — SRS, design docs, ADRs, API specs, test plans — with structured frontmatter into a Git-tracked store. A validated handoff record acts as the contract between agents; the receiving agent packages and reads it before starting work. Works with Cursor, Claude Code, Codex, CI pipelines, and any custom agent runtime.
+## Concept Overview
 
-`acs` is built on the same handoff principles formalized by the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/handoffs/), the [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/handoff) handoff orchestration, and Google's [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A) — applied to the SDLC roles BA, SA, Dev, QA, and persisted to Git so handoffs survive across runtimes, sessions, and CI.
+> ACS turns tacit knowledge trapped in AI chat sessions into formal deliverables that teams can relay, verify, and retain.
 
-## Architecture
+The three diagrams below explain the value, relay flow, and benefits of using ACS. For implementation details, see [Architecture](docs/DEVELOPMENT.md#architecture).
+
+### 1 · Problem vs Solution
+
+```mermaid
+flowchart LR
+    subgraph BEFORE["❌ Without ACS"]
+        direction LR
+        B1["Requirements scattered in chat history"]
+        B2["Design passed verbally — easy to miss items"]
+        B3["Switch AI tools and context is lost"]
+        B4["No way to confirm the previous role finished"]
+    end
+
+    subgraph AFTER["✅ With ACS"]
+        direction LR
+        A1["Each task has a complete document pack"]
+        A2["Handoff checklist — next role must read and confirm"]
+        A3["Same context shared across Cursor, Claude, etc."]
+        A4["Verifiable, traceable, auditable"]
+    end
+
+    BEFORE -->|"Introduce ACS"| AFTER
+```
+
+### 2 · Relay flow
+
+People describe what they need; AI follows role playbooks to produce standardized documents and handoff records; the next role reads the full task pack before starting.
 
 ```mermaid
 flowchart TD
-    DEV(["Developer"])
-    BA(["Business Analyst"])
-    SA(["Solution Architect"])
+    PM(["👤 Product / Business"])
+    ARCH(["👤 Architecture / Tech"])
+    DEV(["👤 Developer"])
+    QA(["👤 QA / Tester"])
 
-    subgraph PROJECT["Project Repository"]
-        CODE["Source Code\n(your codebase)"]
-    end
-    subgraph AGENT["AI Agent Runtime  —  Cursor · Claude Code · Codex"]
-        AI["AI Agent Sessions"]
-        SKILLS["Agent Skill Files\nSKILL.md · AGENTS.md · CLAUDE.md"]
-
-    end
-
-    subgraph ACS["Agent Context Store  (acs)"]
-        CLI["acs CLI\nnpm global binary"]
-        CORE["acs Core Library\nstore resolution · policy · artifacts · handoff · packaging"]
+    subgraph AI["🤖 AI Assistant (Cursor · Claude · Codex)"]
+        direction TB
+        AI1["Reads role playbook on start"]
+        AI2["Produces standardized documents"]
+        AI3["Creates handoff record on completion"]
     end
 
-    subgraph DEDICATED["Dedicated Context Store Repo"]
-        STORE[("Shared Store\nartifacts · handoffs · packages · index.json")]
+    subgraph STORE["📁 Shared Project Folder (ACS)"]
+        direction TB
+        DOC1["📄 Requirements docs"]
+        DOC2["📐 Design docs"]
+        DOC3["💻 Implementation notes"]
+        DOC4["✅ Test plans"]
+        HANDOFF["📋 Handoff checklist"]
     end
 
-    BA -->|"prompts to write requirements"| AI
-    SA -->|"prompts to write system design"| AI
-    DEV -->|"prompts to implement feature"| AI
-    CLI -->|"acs install-skills"| SKILLS
-    AI -->|"reads & edits code"| CODE
-    AI -->|"reads on session start"| SKILLS
-    AI -->|"acs new · handoff · package · validate"| CLI
-    CLI -->|"delegates all store ops"| CORE
-    CORE -->|"writes SRS · design docs · ADRs · handoffs (schema-validated)"| STORE
-    STORE -->|"reads artifacts · packages · index"| CORE
+    PM -->|"Describe the need"| AI
+    ARCH -->|"Confirm design direction"| AI
+    DEV -->|"Direct implementation"| AI
+    QA -->|"Request validation"| AI
+
+    AI --> DOC1 & DOC2 & DOC3 & DOC4
+    AI --> HANDOFF
+    HANDOFF -->|"Next role reads before starting"| AI
+    STORE --> AI
 ```
 
-| Step | What happens |
-|------|--------------|
-| **1 · Install skills** | `acs install-skills` copies `SKILL.md` / `AGENTS.md` / `CLAUDE.md` into each agent's config directory — teaches the agent which role commands to run. |
-| **2 · Agent reads skills** | On task start the agent reads its skill file to learn the `acs` command set and the BA→SA→Dev→QA handoff chain. |
-| **3 · Agent creates artifacts** | Each role agent calls `acs <role> new` to produce schema-validated artifacts with structured frontmatter (task ID, role, type, status, timestamps). |
-| **4 · Structured handoff** | On completion, the agent calls `acs handoff create` to produce a validated YAML handoff record — the contract the next agent must check (`acs handoff check`) and package (`acs package`) before starting. |
-| **5 · Store persists context** | All artifacts, handoff records, and role packages are written to the dedicated Git-tracked store and shared across all role agents and CI pipelines. |
+| Step | In plain terms |
+|------|----------------|
+| **1 · Install playbooks** | Each role's AI knows what to produce and how to hand off. |
+| **2 · Role starts work** | The AI reads its playbook and knows which leg of the relay it owns. |
+| **3 · Produce documents** | Structured, numbered deliverables — not free-form chat output. |
+| **4 · Formal handoff** | A handoff checklist is created; the next role must confirm before starting. |
+| **5 · Persist and share** | Everything is saved to a Git folder for the team and CI. |
+
+### 3 · Benefits
+
+```mermaid
+mindmap
+  root((Benefits of using ACS))
+    For individuals
+      No repeating background every session
+      Switch AI tools without starting from zero
+      Clear on what this leg must deliver
+    For teams
+      Requirements to design to dev to QA relay
+      Handoff checklist reduces missed items
+      Consistent format — easy to find and compare
+    For the organization
+      Traceable — who delivered what and when
+      Auditable — meets process and quality gates
+      Scalable — one store shared across projects
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  What you get with ACS                                              │
+├─────────────────────────────────────────────────────────────────────┤
+│  📦 Complete task pack    End-to-end docs from requirements to QA   │
+│  🔗 Reliable handoff      Formal checklist, not "remember to tell"  │
+│  🧠 Cross-session memory  Context survives tool or people changes   │
+│  ✅ Verifiable start      Next role confirms previous leg is done   │
+│  📜 Full history          Git-backed — investigate, restore, audit  │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ## Prerequisites
 - Node.js `>=20`
@@ -69,7 +127,8 @@ acs --help
 
 Run `acs init` in your project directory. When stdin is a terminal, an interactive wizard guides you through three choices:
 
-```
+```bash
+acs init
 ? How should the context store be hosted?
   ❯ in-repo   — .acs/ lives inside this project (default)
     local     — stored in your user data dir, nothing committed
@@ -83,41 +142,14 @@ Run `acs init` in your project directory. When stdin is a terminal, an interacti
   ○ Codex        → ~/.codex/skills/
 ```
 
-A summary is shown before anything is written, and you can abort with `n`.
-
-Pass `--mode` to skip the wizard entirely:
-
-```bash
-acs init                        # wizard (TTY only)
-acs init --mode in-repo         # silent, creates .acs/ in current dir
-acs init --mode local           # silent, stores in OS user-data dir
-acs init --mode dedicated .     # silent, current dir is the store root
-```
-
-If the ACS store already exists, link the project instead of initializing:
-
-```bash
-acs link /path/to/existing-store
-acs link /path/to/existing-store --path /path/to/project
-acs link /path/to/existing-store --force
-```
-
-`acs link` only writes the project pointer `.acs/config.yaml`. It does not run
-`init`, seed store assets, install skills, or write to the existing store.
-`--force` only replaces an existing project pointer.
-
-| Mode | Where context is stored | Best for |
-|------|------------------------|----------|
-| **in-repo** _(default)_ | `.acs/` inside your project | Most projects — context stays with code |
-| **local** | OS user-data dir | Personal workflows, no repo changes |
-| **dedicated** | This folder IS the store root | Multi-project teams, CI governance |
+For the full command list, see [Commands](#commands).
 
 ## Step 3: Run Your First Workflow
 
-After setup, each team member opens their AI agent (Cursor or Claude Code) and invokes the matching role skill by name. The skill tells the agent exactly which `acs` commands to run — the human never types `acs` directly.
+After setup, each team member opens their AI agent (Codex, Cursor or Claude Code) and invokes the matching role skill by name. The skill tells the agent exactly which `acs` commands to run — the human never types `acs` directly.
 
-> **Skill invocation syntax**
-> - Cursor / Claude Code: `@acs-ba`, `@acs-sa`, `@acs-dev`, `@acs-qa`
+> **AI Agent Skill invocation syntax**
+> - For Codex, Cursor or Claude Code: `/acs-ba`, `/acs-sa`, `/acs-dev`, `/acs-qa`
 
 The examples below follow a single feature task `DEMO-0001: Login with OTP` through the full BA → SA → Dev → QA lifecycle.
 
@@ -129,20 +161,25 @@ The examples below follow a single feature task `DEMO-0001: Login with OTP` thro
 ```
 /acs-ba We need to add OTP-based login. Task ID is DEMO-0001. Title: "Login with OTP".
 ```
+<details>
+  <summary>The `acs-ba` skill activates and the agent internally runs:</summary>
 
-The `acs-ba` skill activates and the agent internally runs:
-```bash
-acs status && acs doctor
-acs ba new srs --task DEMO-0001 --title "Login with OTP"
-acs ba new user-story --task DEMO-0001 --title "Login with OTP User Story"
-acs ba new acceptance-criteria --task DEMO-0001 --title "Login with OTP Acceptance Criteria"
-acs validate --role ba --task DEMO-0001
-acs handoff create --from ba --to sa --task DEMO-0001
-acs package --task DEMO-0001 --role sa
-acs index
+  ```bash
+  acs status && acs doctor
+  acs ba new srs --task DEMO-0001 --title "Login with OTP"
+  acs ba new user-story --task DEMO-0001 --title "Login with OTP User Story"
+  acs ba new acceptance-criteria --task DEMO-0001 --title "Login with OTP Acceptance Criteria"
+  acs validate --role ba --task DEMO-0001
+  acs handoff create --from ba --to sa --task DEMO-0001
+  acs package --task DEMO-0001 --role sa
+  acs index
+  ```
+
+</details>
+
 ```
-
 The agent ends its response with a structured `[HANDOFF: BA → SA | DEMO-0001]` prompt for the SA agent to pick up.
+```
 
 ---
 
@@ -152,20 +189,25 @@ The agent ends its response with a structured `[HANDOFF: BA → SA | DEMO-0001]`
 ```
 /acs-sa Pick up DEMO-0001 from BA. Design the OTP login system.
 ```
+<details>
+  <summary>The `acs-sa` skill activates and the agent internally runs:</summary>
 
-The `acs-sa` skill activates and the agent internally runs:
-```bash
-acs next --role sa --task DEMO-0001
-acs sa new sdd --task DEMO-0001 --title "Login with OTP System Design"
-acs sa new adr --task DEMO-0001 --title "Use Redis for OTP State"
-acs sa new api-design --task DEMO-0001 --title "OTP Login API"
-acs validate --role sa --task DEMO-0001
-acs handoff create --from sa --to dev --task DEMO-0001
-acs package --task DEMO-0001 --role dev
-acs index
+  ```bash
+  acs next --role sa --task DEMO-0001
+  acs sa new sdd --task DEMO-0001 --title "Login with OTP System Design"
+  acs sa new adr --task DEMO-0001 --title "Use Redis for OTP State"
+  acs sa new api-design --task DEMO-0001 --title "OTP Login API"
+  acs validate --role sa --task DEMO-0001
+  acs handoff create --from sa --to dev --task DEMO-0001
+  acs package --task DEMO-0001 --role dev
+  acs index
+  ```
+
+</details>
+
 ```
-
 The agent ends its response with a `[HANDOFF: SA → DEV | DEMO-0001]` prompt.
+```
 
 ---
 
@@ -176,17 +218,23 @@ The agent ends its response with a `[HANDOFF: SA → DEV | DEMO-0001]` prompt.
 /acs-dev Implement DEMO-0001 based on the SA design. Task ID is DEMO-0001.
 ```
 
-The `acs-dev` skill activates and the agent internally runs:
-```bash
-acs next --role dev --task DEMO-0001
-acs dev new implementation-note --task DEMO-0001
-acs validate --role dev --task DEMO-0001
-acs handoff create --from dev --to qa --task DEMO-0001
-acs package --task DEMO-0001 --role qa
-acs index
-```
+<details>
+  <summary>The `acs-dev` skill activates and the agent internally runs:</summary>
 
+  ```bash
+  acs next --role dev --task DEMO-0001
+  acs dev new implementation-note --task DEMO-0001
+  acs validate --role dev --task DEMO-0001
+  acs handoff create --from dev --to qa --task DEMO-0001
+  acs package --task DEMO-0001 --role qa
+  acs index
+  ```
+
+</details>
+
+```
 The agent ends its response with a `[HANDOFF: DEV → QA | DEMO-0001]` prompt.
+```
 
 ---
 
@@ -197,48 +245,32 @@ The agent ends its response with a `[HANDOFF: DEV → QA | DEMO-0001]` prompt.
 /acs-qa Write the test plan for DEMO-0001.
 ```
 
-The `acs-qa` skill activates and the agent internally runs:
-```bash
-acs next --role qa --task DEMO-0001
-acs qa new test-plan --task DEMO-0001 --title "OTP Login Test Plan"
-acs validate --role qa --task DEMO-0001
-acs handoff list --task DEMO-0001
-acs index
+<details>
+  <summary>The `acs-qa` skill activates and the agent internally runs:</summary>
+
+  ```bash
+  acs next --role qa --task DEMO-0001
+  acs qa new test-plan --task DEMO-0001 --title "OTP Login Test Plan"
+  acs validate --role qa --task DEMO-0001
+  acs handoff list --task DEMO-0001
+  acs index
+  ```
+
+</details>
+
+```
+All four role artifacts and handoff records are now persisted in the store.
 ```
 
-All four role artifacts and handoff records are now persisted in the store.
 
 ## Context Store Layout
 
-The store root is `.acs/` in **in-repo** mode and `<store-root>/` in **dedicated** mode. Both use the same structure:
+- In **in-repo** mode the store root is `.acs/`; in **dedicated** mode it is the store repository root.
+- Role deliverables are written under `artifacts/{task_id}/{type}/` (for example `artifacts/DEMO-0001/srs/SRS-DEMO-0001.md`).
+- Handoff records go to `handoffs/`.
+- Context bundles for the next role go to `packages/`.
 
-```text
-<store-root>/
-  config.yaml
-  acs.yaml
-  index.json
-  audit/
-  artifacts/
-    <task-id>/
-      <artifact-type>/
-  handoffs/
-  summaries/
-  packages/
-  roles/
-  artifact-types/
-  workflows/
-  schemas/
-  templates/
-  docs/
-```
-
-- `artifacts/`: durable SDLC artifacts grouped by task, for example `artifacts/DEMO-0001/srs/SRS-DEMO-0001.md` and `artifacts/DEMO-0001/acceptance-criteria/AC-DEMO-0001.md`.
-- `handoffs/`: explicit role-to-role handoff records.
-- `packages/`: role-specific context bundles for the next agent.
-- `index.json`: generated artifact and handoff index.
-- `audit/`: local audit log for CLI-created changes.
-
-Artifact storage is task-first in this version. Older type-first artifact paths are not part of the supported layout.
+For the full directory tree and file-by-file guide, see [ACS Context Store Full Content Guide](docs/ACS_CONTEXT_STORE_INTRO_en.md).
 
 ## Commands
 
@@ -259,12 +291,88 @@ Artifact storage is task-first in this version. Older type-first artifact paths 
 | `acs handoff list`   | Lists handoff records, optionally filtered by task or role.                                             |
 | `acs package`        | Builds a role-specific context package for the next agent or automation step.                           |
 | `acs index`          | Rebuilds `index.json` from artifacts and handoffs.                                                      |
+| `acs site kanban`    | Serve (or build) the built-in zero-dep Kanban/Dashboard SPA with live reload.                           |
+| `acs site docs`      | Serve the MkDocs Material docs site over your artifact Markdown (requires MkDocs).                      |
+| `acs site`           | Run both engines concurrently on separate ports; single Ctrl-C tears both down.                         |
 
 `acs package` includes a context budget advisory in Markdown and JSON output.
 Use `--max-tokens <N>` to override the configured budget for one run. The CLI
 does not split or rewrite artifacts; role skills decide semantic phase documents
 when the advisory reports `warning`, `high`, or `split_recommended`.
 | `acs doctor`         | Runs the same validation checks as `acs validate` for quick health checks.                              |
+
+### Hybrid site preview
+
+`acs site` provides two rendering engines you can run independently or together:
+
+**Engine A — Kanban (built-in, zero-dependency)**
+
+```bash
+acs site kanban                              # serve at http://127.0.0.1:8000/ with live reload
+acs site kanban --build-only                 # generate static files under .acs/site/ and exit
+acs site kanban --build-only --task DEMO-0001 # site focused on a single task
+acs site kanban --port 9000 --no-watch       # custom port, no file-watching
+```
+
+The Kanban engine writes under `site/` inside the resolved ACS store root:
+
+```
+site/
+  index.html
+  assets/
+    site.css
+    site.js     (includes live-reload EventSource, no-op under file://)
+  data/
+    model.json
+```
+
+Views: Dashboard, Kanban board, Artifact browser, Handoff table, Validation report.
+Live reload is driven by SSE at `/__livereload`; file-watching covers `artifacts/`, `handoffs/`, and `audit/`.
+
+> **Note:** `acs site build` has been removed. Use `acs site kanban --build-only` instead.
+
+**Engine B — Docs (MkDocs + Material, optional)**
+
+MkDocs is an optional user-installed Python tool. The engine degrades gracefully if it is absent.
+
+```bash
+# Install MkDocs (once)
+pip install mkdocs mkdocs-material
+
+acs site docs                    # serve at http://127.0.0.1:8001/
+acs site docs --build-only       # build static HTML output and exit
+```
+
+The docs engine writes only `site-docs/mkdocs.yml` under the store root.
+It **never writes anything under `artifacts/`** — doing so would break `acs validate`.
+
+**Concurrent mode**
+
+```bash
+acs site                         # run both engines, print both URLs, single Ctrl-C teardown
+acs site --kanban-port 8000 --docs-port 8001
+acs site --no-watch              # disable Kanban file-watching (MkDocs has its own reload)
+```
+
+**Flag defaults**
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--port` / `--kanban-port` | `8000` | Kanban engine port |
+| `--docs-port` | `8001` | Docs engine port |
+| `--host` | `127.0.0.1` | Loopback only |
+| `--no-watch` | off | Disable Kanban live reload (MkDocs reload unaffected) |
+| `--build-only` | off | Generate and exit; no server |
+| `--open` | off | Open browser after start |
+
+**Derived output**
+
+Both `site/` and `site-docs/` are disposable derived output. They are never scanned by `acs validate` or `acs index`. Recommended `.gitignore` entries for generated stores:
+
+```
+.acs/site/
+.acs/site-docs/
+```
 
 ### Full syntax
 
@@ -286,36 +394,17 @@ acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID>
 acs handoff list [--task <TASK_ID>] [--role <ROLE>]
 acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
 acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
+acs log --task <TASK_ID> [--tail N] [--json]
 acs index
 acs doctor
+acs site [--kanban-port <N>] [--docs-port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+acs site kanban [--build-only] [--port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+acs site docs [--build-only] [--port <N>] [--host <H>] [--open]
 ```
-
-### Command - install-skills
-
-The wizard offers to install skill files during `acs init`. You can also run this separately at any time:
-
-```bash
-acs install-skills --agent cursor
-acs install-skills --agent claude
-acs install-skills --agent codex
-acs install-skills --agent all
-acs install-skills --agent all --path /path/to/repo
-```
-
-| Agent      | Skill files installed |
-| ---------- | --------------------- |
-| `cursor`   | `AGENTS.md`, `~/.cursor/skills/agent-context-store/SKILL.md` |
-| `claude`   | `CLAUDE.md`, `~/.claude/skills/agent-context-store/SKILL.md` |
-| `codex`    | `AGENTS.md`, `~/.codex/skills/agent-context-store/SKILL.md`  |
-| `openclaw` | _(not yet available — warning only)_ |
-| `all`      | All of the above except openclaw |
-
-Skill files are always replaced with the bundled version. If `AGENTS.md` or `CLAUDE.md` already exists, the installer appends to it.
-
 
 ## Aligned with Industry Handoff Standards
 
-`acs` adopts the same handoff vocabulary used by the major agent frameworks — typed handoff records, dynamic role-to-role routing, full task ownership transfer, capability advertisement, and durable checkpointing — and grounds them in a Git-tracked store so the handoff itself becomes an auditable, reviewable artifact rather than an in-memory tool call.
+`acs` applies handoff patterns from the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/handoffs/), [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/handoff), and Google's [Agent2Agent (A2A) protocol](https://github.com/a2aproject/A2A) to BA, SA, Dev, and QA — persisting each handoff to Git as a schema-validated, reviewable contract rather than an in-memory tool call, so work survives across runtimes, sessions, and CI.
 
 | Concept | Industry definition | `acs` equivalent |
 |---------|--------------------|------------------|
@@ -339,6 +428,6 @@ In short: industry handoff frameworks model handoffs as in-process tool calls be
 3. Google Developers Blog — A2A: A new era of agent interoperability: <https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/>
 4. A2A Project — Agent2Agent protocol repository: <https://github.com/a2aproject/A2A>
 
-## Developing This Repository
+## Contributing
 
-If you want to modify or test the toolkit itself, see [DEVELOPMENT.md](/docs/DEVELOPMENT.md)
+To build, test, or contribute to ACS, see the [Development Guide](docs/DEVELOPMENT.md).

@@ -1,14 +1,20 @@
 #!/usr/bin/env node
-import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFile, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import http from "node:http";
+import { spawn } from "node:child_process";
+import type { ServerResponse } from "node:http";
 import { select, checkbox, input, confirm } from "@inquirer/prompts";
+import { mkdocsPreflight, generateMkdocsWorkspace, startMkdocsServe, handleSiteDocs, type MkdocsHandle } from "./docs.js";
 import {
+  approveHandoff,
   buildContextPackage,
   buildIndex,
+  buildSiteModel,
   checkHandoff,
   createArtifact,
   createHandoff,
@@ -318,6 +324,11 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "site") {
+    await handleSite(rest);
+    return;
+  }
+
   throw new Error(`Unknown command "${command}". Run "acs --help" for usage.`);
 }
 
@@ -614,7 +625,28 @@ async function handleHandoff(rest: string[]): Promise<void> {
     return;
   }
 
-  throw new Error('Unknown handoff action. Expected "create", "check", or "list".');
+  if (action === "approve") {
+    const args = parseArgs(tail);
+    const mode = getAcsMode(args);
+    const reviewer = getStringFlag(args, "reviewer") ?? process.env["ACS_REVIEWER"] ?? undefined;
+    const fromRole = getStringFlag(args, "from");
+    const toRole = getStringFlag(args, "to");
+    const taskId = getStringFlag(args, "task");
+    const handoffRef = args.positional[0] ?? getStringFlag(args, "id");
+    const result = await approveHandoff({
+      rootDir: process.cwd(),
+      handoffRef,
+      fromRole,
+      toRole,
+      taskId,
+      reviewer,
+      mode
+    });
+    printResult(`Approved handoff ${result.handoffId}`, result);
+    return;
+  }
+
+  throw new Error('Unknown handoff action. Expected "create", "check", "list", or "approve".');
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -653,6 +685,111 @@ function requireFlag(args: ParsedArgs, name: string): string {
 function getStringFlag(args: ParsedArgs, name: string): string | undefined {
   const value = args.flags[name];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Like getStringFlag, but throws a clear error when the flag was supplied
+ * without a value (e.g. `--port --no-watch`, or `--port` at the end of argv).
+ * The tokenizer stores a valueless flag as boolean `true`; getStringFlag
+ * alone returns undefined for that case, indistinguishable from the flag
+ * being absent entirely, so callers would silently fall back to a default
+ * instead of erroring on a mistyped invocation.
+ *
+ * Used for every `acs site` string-valued flag that has a caller-supplied
+ * default: --port, --host, --task, --kanban-port, --docs-port.
+ */
+function getStringFlagStrict(args: ParsedArgs, name: string): string | undefined {
+  if (args.flags[name] === true) {
+    throw new Error(`--${name} requires a value`);
+  }
+  return getStringFlag(args, name);
+}
+
+/**
+ * Returns true when the flag is present as boolean true or the string "true".
+ * Used for --build-only, --open, --no-watch, etc.
+ */
+function getBoolFlag(args: ParsedArgs, name: string): boolean {
+  const value = args.flags[name];
+  return value === true || value === "true";
+}
+
+/**
+ * Parse a port flag as an integer in range.
+ * By default 0 is valid — it means "OS-assigned ephemeral port" (kanban).
+ * Pass `{ allowZero: false }` for engines that cannot bind port 0 (mkdocs),
+ * which shifts the accepted range to 1–65535.
+ * Falls back to `fallback` when the flag is absent.
+ */
+function parsePortFlag(
+  args: ParsedArgs,
+  name: string,
+  fallback: number,
+  opts: { allowZero?: boolean } = {}
+): number {
+  const allowZero = opts.allowZero ?? true;
+  const raw = getStringFlagStrict(args, name);
+  if (raw === undefined) return fallback;
+  const n = Number.parseInt(raw, 10);
+  const min = allowZero ? 0 : 1;
+  if (!Number.isFinite(n) || n < min || n > 65535 || String(n) !== raw) {
+    throw new Error(`--${name} must be an integer between ${min} and 65535, got "${raw}"`);
+  }
+  return n;
+}
+
+/**
+ * Validate a --host value used in serve commands.
+ *
+ * Accepted characters: letters, digits, dot, hyphen, colon (IPv6), square
+ * brackets (IPv6 literal notation). This covers all normal use-cases:
+ *   localhost, 127.0.0.1, 0.0.0.0, ::1, [::1], example.com
+ *
+ * Rejected: spaces, &, ;, quotes, slashes, and other shell metacharacters
+ * that could be re-parsed by cmd.exe on Windows when the URL is built from
+ * the host value and passed to "cmd /c start".
+ *
+ * Throws a clear Error when the value is invalid; never throws for undefined.
+ */
+function validateHost(host: string, flagName = "--host"): void {
+  // Allow: letters (a-z A-Z), digits (0-9), dot, hyphen, colon, brackets
+  if (!/^[A-Za-z0-9.\-:\[\]]+$/.test(host)) {
+    throw new Error(
+      `${flagName} contains invalid characters. ` +
+      `Allowed: letters, digits, dot, hyphen, colon, brackets (e.g. localhost, 127.0.0.1, ::1). ` +
+      `Got "${host}"`
+    );
+  }
+}
+
+/**
+ * Strip surrounding square brackets from an IPv6 literal.
+ *
+ * validateHost accepts the bracketed form ("[::1]") because that is correct for
+ * a printed URL (http://[::1]:8000/). But node's `server.listen(port, host)`
+ * expects the UNBRACKETED address ("::1") and dies with getaddrinfo ENOTFOUND
+ * on the bracketed form. Use this only at the listen() boundary.
+ */
+function unbracketHost(host: string): string {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+/**
+ * Format a host for embedding in a printed/opened URL: `http://<host>:<port>/`.
+ *
+ * An IPv6 literal (e.g. `::1`) MUST be bracketed in a URL per RFC 3986 —
+ * `http://::1:8000/` is not a valid URL (the last `:8000` is ambiguous with
+ * the address itself). validateHost() already accepts the bracketed form
+ * (`[::1]`), so this only adds brackets when they are not already present.
+ * A hostname or IPv4 address (no colon) is returned unchanged.
+ */
+export function formatHostForUrl(host: string): string {
+  if (host.startsWith("[") && host.endsWith("]")) return host;
+  return host.includes(":") ? `[${host}]` : host;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function printResult(title: string, result: { created: string[]; updated: string[]; warnings: string[] }): void {
@@ -786,11 +923,19 @@ Usage:
   acs handoff check <HANDOFF_ID_OR_PATH>
   acs handoff check --from <ROLE> --to <ROLE> --task <TASK_ID> [--mode strict|relaxed]
   acs handoff list [--task <TASK_ID>] [--role <ROLE>]
+  acs handoff approve <HANDOFF_ID_OR_PATH> [--reviewer <NAME>] [--mode strict|relaxed]
+  acs handoff approve --from <ROLE> --to <ROLE> --task <TASK_ID> [--reviewer <NAME>] [--mode strict|relaxed]
   acs package --task <TASK_ID> --role <ROLE> [--format markdown|json] [--max-tokens <N>]
   acs <ROLE> package --task <TASK_ID> [--format markdown|json] [--max-tokens <N>]
   acs log --task <TASK_ID> [--tail N] [--json]
   acs index
   acs doctor
+  acs site [--kanban-port <N>] [--docs-port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+  acs site kanban [--build-only] [--port <N>] [--host <H>] [--no-watch] [--open] [--task <ID>]
+  acs site docs [--build-only] [--port <N>] [--host <H>] [--open]
+
+Note: "acs site build" is removed. Use "acs site kanban --build-only" instead.
+Note: --no-watch affects only the Kanban engine; MkDocs has its own live-reload.
 
 Validation strictness (--mode):
   strict   (default) Upstream artifacts are required; missing inputs are errors.
@@ -820,6 +965,11 @@ Examples:
   acs next --role sa --task DEMO-0001
   acs handoff create --from ba --to sa --task DEMO-0001
   acs package --task DEMO-0001 --role sa
+  acs site kanban                             # serve workflow app at http://127.0.0.1:8000/
+  acs site kanban --build-only               # generate static site under .acs/site/ (no server)
+  acs site kanban --build-only --task DEMO-0001  # site focused on a single task
+  acs site docs                              # serve MkDocs Material docs at http://127.0.0.1:8001/
+  acs site                                   # run both engines concurrently on separate ports
 `);
 }
 
@@ -827,7 +977,870 @@ function toPosix(value: string): string {
   return value.split(path.sep).join("/");
 }
 
-main(process.argv.slice(2)).catch((error: unknown) => {
-  console.error(`ERROR ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+// ─── site ─────────────────────────────────────────────────────────────────────
+
+async function handleSite(rest: string[]): Promise<void> {
+  const [action, ...tail] = rest;
+
+  // bare `acs site` or `acs site --open` / `acs site --kanban-port 9000` etc.
+  if (action === undefined || action.startsWith("--")) {
+    return handleSiteBoth(rest);
+  }
+
+  if (action === "kanban") return handleSiteKanban(tail);
+  if (action === "docs") {
+    // Parse and validate ALL docs flags here so the host flows through the
+    // shared validateHost guard before it can reach a shell spawn in docs.ts,
+    // and the port goes through the shared parsePortFlag (docs cannot bind 0).
+    const args = parseArgs(tail);
+    const host = getStringFlagStrict(args, "host") ?? "127.0.0.1";
+    validateHost(host);
+    const port = parsePortFlag(args, "port", 8001, { allowZero: false });
+    const open = getBoolFlag(args, "open");
+    const buildOnly = getBoolFlag(args, "build-only");
+
+    // Resolve storeDir via the lightweight getStoreInfo (no full site model
+    // build). If the store is not initialized, error out clearly instead of
+    // silently writing a stray .acs/site-docs/mkdocs.yml.
+    const info = await getStoreInfo(process.cwd());
+    if (!info.initialized) {
+      throw new Error(
+        `No initialized context store found at ${process.cwd()}. Run "acs init" first.`
+      );
+    }
+
+    return handleSiteDocs({ buildOnly, host, port, open, storeDir: info.storeDir });
+  }
+
+  if (action === "build") {
+    throw new Error(
+      'The "acs site build" command has been removed. Use "acs site kanban --build-only" instead.'
+    );
+  }
+
+  throw new Error(
+    `Unknown site action "${action}". Expected "kanban", "docs", or no subcommand. ` +
+    'The old "acs site build" is now "acs site kanban --build-only".'
+  );
+}
+
+// ─── rebuildKanbanSite ────────────────────────────────────────────────────────
+
+interface KanbanBuildResult {
+  siteDir: string;
+  storeDir: string;
+  model: Awaited<ReturnType<typeof buildSiteModel>>;
+}
+
+/**
+ * Write the three STATIC site assets (index.html, assets/site.css,
+ * assets/site.js). These are pure functions of the compiled CLI source, not
+ * of store content — they never change between rebuilds of the same running
+ * process. Written once at build-only / serve startup; NOT rewritten by
+ * every watch-triggered rebuild (see rebuildModelOnly).
+ */
+async function writeStaticSiteAssets(siteDir: string): Promise<void> {
+  await mkdir(path.join(siteDir, "assets"), { recursive: true });
+  await writeFileUtf8(path.join(siteDir, "assets", "site.css"), buildSiteCss());
+  await writeFileUtf8(path.join(siteDir, "assets", "site.js"), buildSiteJs());
+  await writeFileUtf8(path.join(siteDir, "index.html"), buildSiteHtml());
+}
+
+async function writeModelJson(
+  model: Awaited<ReturnType<typeof buildSiteModel>>,
+  siteDir: string
+): Promise<void> {
+  await mkdir(path.join(siteDir, "data"), { recursive: true });
+  await writeFileUtf8(path.join(siteDir, "data", "model.json"), JSON.stringify(model, null, 2));
+}
+
+/**
+ * Full site build: static assets + data/model.json. Used for --build-only
+ * and the initial serve-mode entry (both need the complete site on disk).
+ */
+async function rebuildKanbanSite(
+  cwd: string,
+  taskFilter?: string
+): Promise<KanbanBuildResult> {
+  const model = await buildSiteModel(cwd, taskFilter);
+  const { storeDir } = model.store;
+  const siteDir = path.join(storeDir, "site");
+
+  await writeModelJson(model, siteDir);
+  await writeStaticSiteAssets(siteDir);
+
+  return { siteDir, storeDir, model };
+}
+
+/**
+ * Lighter rebuild used by the file-watch callback during serve: recomputes
+ * and rewrites ONLY data/model.json. The static assets do not depend on
+ * store content, so rewriting them on every artifact/handoff/audit change is
+ * wasted I/O (site.css/site.js are already on disk from the initial
+ * rebuildKanbanSite() call at serve startup).
+ */
+async function rebuildModelOnly(
+  cwd: string,
+  taskFilter: string | undefined,
+  siteDir: string
+): Promise<Awaited<ReturnType<typeof buildSiteModel>>> {
+  const model = await buildSiteModel(cwd, taskFilter);
+  await writeModelJson(model, siteDir);
+  return model;
+}
+
+// ─── handleSiteKanban ─────────────────────────────────────────────────────────
+
+async function handleSiteKanban(tail: string[]): Promise<void> {
+  const args = parseArgs(tail);
+  const taskFilter = getStringFlagStrict(args, "task");
+  const buildOnly = getBoolFlag(args, "build-only");
+  const port = parsePortFlag(args, "port", 8000);
+  const host = getStringFlagStrict(args, "host") ?? "127.0.0.1";
+  validateHost(host);
+  const noWatch = getBoolFlag(args, "no-watch");
+  const watch = !noWatch;
+  const openBrowser_ = getBoolFlag(args, "open");
+
+  if (buildOnly) {
+    // rebuildKanbanSite now returns the model — use it for the notice,
+    // eliminating a redundant second buildSiteModel call.
+    const { siteDir, storeDir: _storeDir, model } = await rebuildKanbanSite(process.cwd(), taskFilter);
+    if (taskFilter && model.tasks.length === 0) {
+      console.log(`notice no artifacts found for task "${taskFilter}" — site will be empty`);
+    }
+    const htmlPath = path.join(siteDir, "index.html");
+    const modelJsonPath = path.join(siteDir, "data", "model.json");
+    const cssPath = path.join(siteDir, "assets", "site.css");
+    const jsPath = path.join(siteDir, "assets", "site.js");
+    console.log(`OK site build complete`);
+    console.log(`created ${toPosix(htmlPath)}`);
+    console.log(`created ${toPosix(modelJsonPath)}`);
+    console.log(`created ${toPosix(cssPath)}`);
+    console.log(`created ${toPosix(jsPath)}`);
+    return;
+  }
+
+  // Serve mode — destructure model (as build-only already does) so the
+  // "no artifacts found" notice is printed on initial entry here too. Only
+  // on this first build: the watch callback below intentionally stays quiet
+  // on rebuilds.
+  const { siteDir, storeDir, model } = await rebuildKanbanSite(process.cwd(), taskFilter);
+  if (taskFilter && model.tasks.length === 0) {
+    console.log(`notice no artifacts found for task "${taskFilter}" — site will be empty`);
+  }
+
+  const { server, clients, actualPort } = await serveKanban({ siteDir, host, port });
+
+  const url = `http://${formatHostForUrl(host)}:${actualPort}/`;
+  console.log(`OK ACS kanban serving at ${url}`);
+
+  if (openBrowser_) {
+    openBrowser(url);
+  }
+
+  let watcher: { close(): void } | undefined;
+  if (watch) {
+    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, siteDir, () => {
+      broadcastReload(clients);
+    });
+  }
+
+  await awaitSigint(() => {
+    server.close();
+    for (const res of clients) {
+      try { res.end(); } catch { /* ignore */ }
+    }
+    clients.clear();
+    if (watcher) watcher.close();
+  });
+}
+
+// ─── serveKanban / serveStatic / SSE ─────────────────────────────────────────
+
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css":  "text/css; charset=utf-8",
+  ".js":   "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+};
+
+interface ServeKanbanResult {
+  server: http.Server;
+  clients: Set<ServerResponse>;
+  actualPort: number;
+}
+
+async function serveKanban(opts: {
+  siteDir: string;
+  host: string;
+  port: number;
+}): Promise<ServeKanbanResult> {
+  const { siteDir, host, port } = opts;
+  const clients = new Set<ServerResponse>();
+
+  const server = http.createServer((req, res) => {
+    const url = req.url ?? "/";
+    if (url.startsWith("/__livereload")) {
+      handleLiveReload(req, res, clients);
+      return;
+    }
+    serveStatic(req, res, siteDir);
+  });
+
+  // The listen phase must resolve on success and reject on error.
+  // Using success-callback only causes the promise to hang forever on EADDRINUSE.
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: NodeJS.ErrnoException) => {
+      server.off("listening", onListening);
+      const msg = err.code === "EADDRINUSE"
+        ? `kanban port ${port} is in use — choose another with --port`
+        : `kanban server error: ${err.message}`;
+      reject(new Error(msg));
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    // Listen needs the unbracketed IPv6 form; the printed URL keeps brackets.
+    server.listen(port, unbracketHost(host));
+  });
+
+  // Post-listen error handler for runtime errors (e.g. connection resets)
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    console.error(`error kanban server: ${err.message}`);
+  });
+
+  const addr = server.address();
+  const actualPort = typeof addr === "object" && addr !== null ? addr.port : port;
+
+  return { server, clients, actualPort };
+}
+
+function serveStatic(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  siteDir: string
+): void {
+  const rawUrl = req.url ?? "/";
+  // Strip query string
+  const urlPath = rawUrl.split("?")[0];
+
+  // Decode and guard against path traversal
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    res.writeHead(400);
+    res.end("Bad Request");
+    return;
+  }
+
+  // Map / -> /index.html
+  const normalized = decoded === "/" ? "/index.html" : decoded;
+
+  const resolved = path.resolve(siteDir, "." + normalized);
+
+  // Path-traversal guard
+  if (resolved !== siteDir && !resolved.startsWith(siteDir + path.sep)) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return;
+  }
+
+  if (!existsSync(resolved)) {
+    res.writeHead(404);
+    res.end("Not Found");
+    return;
+  }
+
+  // Reject directory requests (GET /assets, etc.) — readFile on a dir yields EISDIR → 500
+  try {
+    if (statSync(resolved).isDirectory()) {
+      res.writeHead(404);
+      res.end("Not Found");
+      return;
+    }
+  } catch {
+    res.writeHead(404);
+    res.end("Not Found");
+    return;
+  }
+
+  const ext = path.extname(resolved).toLowerCase();
+  const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+
+  readFile(resolved).then((data) => {
+    res.writeHead(200, { "Content-Type": contentType });
+    res.end(data);
+  }).catch(() => {
+    res.writeHead(500);
+    res.end("Internal Server Error");
+  });
+}
+
+function handleLiveReload(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  clients: Set<ServerResponse>
+): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.write(": connected\n\n");
+
+  clients.add(res);
+  res.on("close", () => {
+    clients.delete(res);
+  });
+}
+
+function broadcastReload(clients: Set<ServerResponse>): void {
+  for (const res of clients) {
+    try {
+      res.write("data: reload\n\n");
+    } catch {
+      clients.delete(res);
+    }
+  }
+}
+
+// ─── watchAndRebuild ──────────────────────────────────────────────────────────
+
+function watchAndRebuild(
+  storeDir: string,
+  cwd: string,
+  taskFilter: string | undefined,
+  siteDir: string,
+  onRebuilt: () => void
+): { close(): void } {
+  const watchers: Array<ReturnType<typeof fsWatch>> = [];
+  const dirsToWatch = ["artifacts", "handoffs", "audit"];
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  // In-flight guard: a rebuild slower than the debounce window would
+  // otherwise let overlapping rebuildModelOnly() runs race writes to
+  // data/model.json. `dirty` ensures exactly one follow-up rebuild runs
+  // after the current one finishes, instead of stacking concurrent runs.
+  let rebuilding = false;
+  let dirty = false;
+  let closed = false;
+
+  function runRebuild(): void {
+    if (rebuilding) {
+      dirty = true;
+      return;
+    }
+    rebuilding = true;
+    rebuildModelOnly(cwd, taskFilter, siteDir)
+      .then(() => {
+        onRebuilt();
+      })
+      .catch((err: unknown) => {
+        console.error(`warning rebuild failed: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        rebuilding = false;
+        if (dirty && !closed) {
+          dirty = false;
+          runRebuild();
+        }
+      });
+  }
+
+  for (const sub of dirsToWatch) {
+    const dir = path.join(storeDir, sub);
+    if (!existsSync(dir)) continue;
+    try {
+      const w = fsWatch(dir, { recursive: true }, () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(runRebuild, 150);
+      });
+      watchers.push(w);
+    } catch {
+      // Platform may not support recursive watch; skip silently
+    }
+  }
+
+  return {
+    close() {
+      closed = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      for (const w of watchers) {
+        try { w.close(); } catch { /* ignore */ }
+      }
+    }
+  };
+}
+
+// ─── handleSiteBoth ───────────────────────────────────────────────────────────
+
+async function handleSiteBoth(rest: string[]): Promise<void> {
+  const args = parseArgs(rest);
+  const kanbanPort = parsePortFlag(args, "kanban-port", 8000);
+  // The docs engine cannot use ephemeral port 0 (mkdocs has no such mode); the
+  // kanban engine legitimately uses 0 for OS-assigned ports. allowZero:false
+  // enforces the 1–65535 range for docs here (no hand-rolled zero check).
+  const docsPort   = parsePortFlag(args, "docs-port", 8001, { allowZero: false });
+  const host       = getStringFlagStrict(args, "host") ?? "127.0.0.1";
+  validateHost(host);
+  const noWatch    = getBoolFlag(args, "no-watch");
+  const watch      = !noWatch;
+  const taskFilter = getStringFlagStrict(args, "task");
+  const openBrowser_ = getBoolFlag(args, "open");
+
+  // Build the Kanban site files first (needed by both paths)
+  const { siteDir, storeDir } = await rebuildKanbanSite(process.cwd(), taskFilter);
+
+  // Check MkDocs BEFORE starting either server so we can report both in the banner.
+  // Neither engine's failure blocks the other.
+  const docsPresent = await mkdocsPreflight();
+  let docsHandle: MkdocsHandle | undefined;
+  // Tracks whether the docs child is still alive. startMkdocsServe returns a
+  // handle BEFORE the child binds, so a truthy handle alone does not mean docs
+  // is running — we must consume waitForExit() to detect an immediate crash
+  // (e.g. docs port occupied) instead of hanging with zero live engines.
+  let docsAlive = false;
+  // Set BEFORE docsHandle.kill() in the SIGINT cleanup below. The docs
+  // waitForExit() continuation checks this to distinguish an intentional
+  // teardown from a real crash — Windows reports a killed shell child's exit
+  // code as 1, indistinguishable from a real failure by exit code alone.
+  let docsTeardown = false;
+
+  // --- Start Kanban engine (try/catch so docs engine still starts on failure) ---
+  let kanbanServer: http.Server | undefined;
+  let kanbanClients: Set<ServerResponse> | undefined;
+  let kanbanActualPort = kanbanPort;
+
+  try {
+    const kanban = await serveKanban({ siteDir, host, port: kanbanPort });
+    kanbanServer = kanban.server;
+    kanbanClients = kanban.clients;
+    kanbanActualPort = kanban.actualPort;
+  } catch (err: unknown) {
+    console.error(`error ${err instanceof Error ? err.message : String(err)}`);
+    // Kanban failed — still proceed to start docs if available
+  }
+
+  // --- Start Docs engine (independent of Kanban result) ---
+  if (docsPresent) {
+    try {
+      const { configPath } = await generateMkdocsWorkspace(storeDir);
+      const handle = startMkdocsServe(configPath, host, docsPort);
+      docsHandle = handle;
+      docsAlive = true;
+      // Observe the docs child's exit. If it dies and Kanban is not serving,
+      // there is nothing left to keep the process alive — exit non-zero rather
+      // than blocking forever in awaitSigint.
+      void handle.waitForExit().then((code) => {
+        docsAlive = false;
+        // Intentional teardown (SIGINT cleanup already set this flag before
+        // calling docsHandle.kill()) — never print an error or exit(1) for
+        // it, regardless of WHY the child exited.
+        if (docsTeardown) return;
+        if (code !== null && code !== 0) {
+          console.error(`error docs engine exited with code ${code}`);
+        }
+        if (!kanbanServer) {
+          console.error("error both engines have stopped — exiting.");
+          process.exit(1);
+        }
+      });
+      // Give an immediately-dying child (e.g. docs port in use) a brief moment
+      // to fail so we do not print a bogus "docs serving" banner for it.
+      await Promise.race([handle.waitForExit(), delay(400)]);
+    } catch (err: unknown) {
+      docsAlive = false;
+      console.error(`error docs engine: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    console.log("notice MkDocs not found — running Kanban only.");
+    console.log("  To enable docs: pip install mkdocs mkdocs-material");
+  }
+
+  // If neither engine is live, exit with error instead of hanging.
+  if (!kanbanServer && !docsAlive) {
+    throw new Error("Both engines failed to start. See errors above.");
+  }
+
+  // --- Print banner ---
+  const urlHost = formatHostForUrl(host);
+  const kanbanUrl = kanbanServer ? `http://${urlHost}:${kanbanActualPort}/` : null;
+  const docsUrl   = docsAlive   ? `http://${urlHost}:${docsPort}/`         : null;
+
+  if (kanbanUrl && docsUrl) {
+    console.log(`OK ACS site running:`);
+    console.log(`  kanban  ${kanbanUrl}  (workflow app, live reload)`);
+    console.log(`  docs    ${docsUrl}  (mkdocs material)`);
+    console.log(`Watching artifacts/ handoffs/ audit/ — Ctrl-C to stop both.`);
+  } else if (kanbanUrl) {
+    console.log(`OK ACS kanban serving at ${kanbanUrl}`);
+    console.log(`Watching artifacts/ handoffs/ audit/ — Ctrl-C to stop.`);
+  } else if (docsUrl) {
+    console.log(`OK ACS docs serving at ${docsUrl}`);
+    console.log(`Ctrl-C to stop.`);
+  }
+
+  if (openBrowser_ && kanbanUrl) {
+    openBrowser(kanbanUrl);
+  }
+
+  let watcher: { close(): void } | undefined;
+  if (watch && kanbanServer && kanbanClients) {
+    watcher = watchAndRebuild(storeDir, process.cwd(), taskFilter, siteDir, () => {
+      if (kanbanClients) broadcastReload(kanbanClients);
+    });
+  }
+
+  await awaitSigint(() => {
+    if (kanbanServer) {
+      kanbanServer.close();
+      for (const res of kanbanClients ?? []) {
+        try { res.end(); } catch { /* ignore */ }
+      }
+      kanbanClients?.clear();
+    }
+    if (watcher) watcher.close();
+    if (docsHandle) {
+      docsTeardown = true;
+      docsHandle.kill();
+    }
+  });
+}
+
+// ─── openBrowser ─────────────────────────────────────────────────────────────
+
+function openBrowser(url: string): void {
+  try {
+    let cmd: string;
+    let cmdArgs: string[];
+    if (process.platform === "win32") {
+      cmd = "cmd";
+      cmdArgs = ["/c", "start", "", url];
+    } else if (process.platform === "darwin") {
+      cmd = "open";
+      cmdArgs = [url];
+    } else {
+      cmd = "xdg-open";
+      cmdArgs = [url];
+    }
+    const child = spawn(cmd, cmdArgs, { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {
+    // Opening browser is optional; never fatal
+  }
+}
+
+// ─── awaitSigint ─────────────────────────────────────────────────────────────
+
+function awaitSigint(cleanup: () => void): Promise<void> {
+  return new Promise((resolve) => {
+    process.once("SIGINT", () => {
+      cleanup();
+      resolve();
+    });
+  });
+}
+
+async function writeFileUtf8(filePath: string, content: string): Promise<void> {
+  await writeFile(filePath, content, "utf8");
+}
+
+function buildSiteHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ACS Dashboard</title>
+  <link rel="stylesheet" href="assets/site.css" />
+</head>
+<body>
+  <nav id="nav">
+    <a href="#" data-view="dashboard">Dashboard</a>
+    <a href="#" data-view="kanban">Kanban</a>
+    <a href="#" data-view="artifacts">Artifacts</a>
+    <a href="#" data-view="handoffs">Handoffs</a>
+    <a href="#" data-view="validation">Validation</a>
+  </nav>
+  <main id="main"></main>
+  <script src="assets/site.js"></script>
+</body>
+</html>
+`;
+}
+
+function buildSiteCss(): string {
+  return [
+    "/* ACS Static Site — zero-dependency styles */",
+    "*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }",
+    "body { font-family: system-ui, sans-serif; background: #f8f9fa; color: #212529; line-height: 1.5; }",
+    "nav { background: #343a40; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; }",
+    "nav a { color: #adb5bd; text-decoration: none; font-size: 0.9rem; }",
+    "nav a:hover, nav a.active { color: #fff; }",
+    "#main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }",
+    "h1 { font-size: 1.5rem; margin-bottom: 1rem; }",
+    "h2 { font-size: 1.2rem; margin: 1rem 0 0.5rem; }",
+    "h3 { font-size: 1rem; margin: 0.75rem 0 0.25rem; }",
+    ".cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }",
+    ".card { background: #fff; border-radius: 6px; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }",
+    ".card .value { font-size: 2rem; font-weight: bold; }",
+    ".card .label { font-size: 0.8rem; color: #6c757d; }",
+    ".kanban { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 1rem; }",
+    ".kanban-col { background: #e9ecef; border-radius: 6px; min-width: 160px; padding: 0.75rem; }",
+    ".kanban-col h3 { font-size: 0.85rem; color: #495057; margin-bottom: 0.5rem; }",
+    ".kanban-card { background: #fff; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; font-size: 0.85rem; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.08); }",
+    ".kanban-card:hover { background: #f0f4ff; }",
+    ".badge-pending { display: inline-block; margin-top: 0.4rem; padding: 0.1rem 0.4rem; border-radius: 10px; background: #fff3cd; color: #856404; font-size: 0.7rem; font-weight: 600; }",
+    "table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }",
+    "th, td { padding: 0.6rem 0.9rem; text-align: left; border-bottom: 1px solid #dee2e6; font-size: 0.88rem; }",
+    "th { background: #f1f3f5; font-weight: 600; }",
+    "tr:last-child td { border-bottom: none; }",
+    ".badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; }",
+    ".badge-ok { background: #d1e7dd; color: #0f5132; }",
+    ".badge-warn { background: #fff3cd; color: #664d03; }",
+    ".badge-error { background: #f8d7da; color: #842029; }",
+    ".badge-blocked { background: #f8d7da; color: #842029; }",
+    ".badge-done { background: #d1e7dd; color: #0f5132; }",
+    ".error-list { list-style: none; }",
+    ".error-list li { padding: 0.3rem 0; border-bottom: 1px solid #dee2e6; font-size: 0.85rem; }",
+    ".error-list li::before { content: '\\2716  '; color: #dc3545; }",
+    ".warn-list li::before { content: '\\26A0  '; color: #ffc107; }",
+    "pre { background: #f1f3f5; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 0.82rem; }",
+    "code { background: #f1f3f5; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.88em; }",
+    ""
+  ].join("\n");
+}
+
+function buildSiteJs(): string {
+  // Use string concatenation for the JS code to avoid backtick template literal conflicts.
+  // The JS regex patterns for fenced code blocks use triple-backtick which cannot be
+  // embedded in a TypeScript template literal.
+  const lines: string[] = [
+    "/* ACS Static Site — zero-dependency JavaScript */",
+    "(function() {",
+    "  'use strict';",
+    "  var model = null;",
+    "  var currentView = 'dashboard';",
+    // Splice in the SINGLE shared renderer source (escHtml / renderMarkdown /
+    // renderInline). This is the exact same source the unit tests exercise via
+    // buildRendererJs(), so a renderer fix reaches both the shipped bundle and
+    // the tests. rendererSourceLines() emits bare function declarations (no
+    // trailing `return {…}`), so they slot into this IIFE unchanged.
+    ...rendererSourceLines(),
+    "  function badge(text, cls) { return '<span class=\"badge badge-' + escHtml(cls) + '\">' + escHtml(text) + '</span>'; }",
+    "  function renderDashboard() {",
+    "    var v = model.validation;",
+    "    var validBadge = v.valid ? badge('valid', 'ok') : badge('invalid', 'error');",
+    "    return '<h1>ACS Dashboard</h1>' +",
+    "      '<div class=\"cards\">' +",
+    "      '<div class=\"card\"><div class=\"value\">' + escHtml(String(model.tasks.length)) + '</div><div class=\"label\">Tasks</div></div>' +",
+    "      '<div class=\"card\"><div class=\"value\">' + escHtml(String(model.artifacts.length)) + '</div><div class=\"label\">Artifacts</div></div>' +",
+    "      '<div class=\"card\"><div class=\"value\">' + escHtml(String(model.handoffs.length)) + '</div><div class=\"label\">Handoffs</div></div>' +",
+    "      '<div class=\"card\"><div class=\"value\">' + validBadge + '</div><div class=\"label\">Validation</div></div>' +",
+    "      '</div>' +",
+    "      '<p><strong>Store:</strong> ' + escHtml(model.store.storeDir) + '</p>' +",
+    "      '<p><strong>Mode:</strong> ' + escHtml(model.store.mode) + '</p>' +",
+    "      '<p><strong>Generated:</strong> ' + escHtml(model.generatedAt) + '</p>';",
+    "  }",
+    "  var kanbanOrder = ['Entry', 'BA', 'SA', 'DEV', 'QA', 'Blocked', 'Done'];",
+    "  function renderKanban() {",
+    "    var cols = {};",
+    "    kanbanOrder.forEach(function(s) { cols[s] = []; });",
+    "    model.tasks.forEach(function(t) { var s = t.kanbanState || 'Entry'; if (!cols[s]) cols[s] = []; cols[s].push(t); });",
+    "    var html = '<h1>Kanban Board</h1><div class=\"kanban\">';",
+    "    kanbanOrder.forEach(function(state) {",
+    "      html += '<div class=\"kanban-col\"><h3>' + escHtml(state) + ' (' + cols[state].length + ')</h3>';",
+    "      cols[state].forEach(function(t) {",
+    "        var badge = t.reviewStatus === 'pending' ? '<span class=\"badge-pending\">⏳ Pending' + (t.pendingToRole ? ' ' + escHtml(String(t.pendingToRole).toUpperCase()) : '') + '</span>' : '';",
+    "        html += '<div class=\"kanban-card\" onclick=\"showTaskDetail(' + escHtml(JSON.stringify(t.taskId)) + ')\">' + escHtml(t.taskId) + '<br><small>' + escHtml(String(t.artifactCount)) + ' artifacts</small>' + badge + '</div>';",
+    "      });",
+    "      html += '</div>';",
+    "    });",
+    "    html += '</div>'; return html;",
+    "  }",
+    "  function renderArtifacts() {",
+    "    var html = '<h1>Artifacts</h1><table><thead><tr><th>ID</th><th>Type</th><th>Task</th><th>Status</th><th>Approval</th></tr></thead><tbody>';",
+    "    model.artifacts.forEach(function(a) { html += '<tr><td>' + escHtml(a.id) + '</td><td>' + escHtml(a.type) + '</td><td>' + escHtml(a.taskId) + '</td><td>' + escHtml(a.status) + '</td><td>' + escHtml(a.approvalStatus) + '</td></tr>'; });",
+    "    html += '</tbody></table>'; return html;",
+    "  }",
+    "  function renderHandoffs() {",
+    "    var html = '<h1>Handoffs</h1><table><thead><tr><th>ID</th><th>Task</th><th>From</th><th>To</th><th>Status</th><th>Approval</th></tr></thead><tbody>';",
+    "    model.handoffs.forEach(function(h) { html += '<tr><td>' + escHtml(h.id) + '</td><td>' + escHtml(h.taskId) + '</td><td>' + escHtml(h.fromRole) + '</td><td>' + escHtml(h.toRole) + '</td><td>' + escHtml(h.status) + '</td><td>' + escHtml(h.approvalStatus) + '</td></tr>'; });",
+    "    html += '</tbody></table>'; return html;",
+    "  }",
+    "  function renderValidation() {",
+    "    var v = model.validation;",
+    "    var html = '<h1>Validation</h1>';",
+    "    html += '<p>' + (v.valid ? badge('PASSED', 'ok') : badge('FAILED', 'error')) + '</p>';",
+    "    if (v.errors.length > 0) { html += '<h2>Errors (' + v.errors.length + ')</h2><ul class=\"error-list\">'; v.errors.forEach(function(e) { html += '<li>' + escHtml(e) + '</li>'; }); html += '</ul>'; }",
+    "    if (v.warnings.length > 0) { html += '<h2>Warnings (' + v.warnings.length + ')</h2><ul class=\"error-list warn-list\">'; v.warnings.forEach(function(w) { html += '<li>' + escHtml(w) + '</li>'; }); html += '</ul>'; }",
+    "    if (v.errors.length === 0 && v.warnings.length === 0) { html += '<p>No issues found.</p>'; }",
+    "    return html;",
+    "  }",
+    "  function showTaskDetail(taskId) {",
+    "    var t = model.tasks.find(function(x) { return x.taskId === taskId; });",
+    "    if (!t) return;",
+    "    var html = '<h1>Task: ' + escHtml(t.taskId) + '</h1>';",
+    "    html += '<p><strong>Kanban:</strong> ' + escHtml(t.kanbanState) + ' &nbsp; <strong>Next role:</strong> ' + escHtml(t.suggestedNextRole) + '</p>';",
+    "    html += '<h2>Artifacts (' + t.artifactCount + ')</h2>';",
+    "    if (t.artifacts.length > 0) { html += '<table><thead><tr><th>ID</th><th>Type</th><th>Status</th></tr></thead><tbody>'; t.artifacts.forEach(function(a) { html += '<tr><td>' + escHtml(a.id) + '</td><td>' + escHtml(a.type) + '</td><td>' + escHtml(a.status) + '</td></tr>'; }); html += '</tbody></table>'; }",
+    "    html += '<h2>Timeline (' + t.timeline.length + ' events)</h2>';",
+    "    if (t.timeline.length > 0) { html += '<ul>'; t.timeline.forEach(function(ev) { html += '<li>' + escHtml(ev.ts || '') + ' &mdash; ' + escHtml(ev.action) + '</li>'; }); html += '</ul>'; }",
+    "    html += '<p><a href=\"#\" onclick=\"navigate(\\'kanban\\'); return false;\">&larr; Back to Kanban</a></p>';",
+    "    document.getElementById('main').innerHTML = html;",
+    "  }",
+    "  window.showTaskDetail = showTaskDetail;",
+    "  function navigate(view) {",
+    "    currentView = view;",
+    "    document.querySelectorAll('nav a').forEach(function(a) { a.classList.toggle('active', a.dataset.view === view); });",
+    "    var main = document.getElementById('main');",
+    "    switch (view) {",
+    "      case 'dashboard': main.innerHTML = renderDashboard(); break;",
+    "      case 'kanban': main.innerHTML = renderKanban(); break;",
+    "      case 'artifacts': main.innerHTML = renderArtifacts(); break;",
+    "      case 'handoffs': main.innerHTML = renderHandoffs(); break;",
+    "      case 'validation': main.innerHTML = renderValidation(); break;",
+    "      default: main.innerHTML = '<p>Unknown view.</p>';",
+    "    }",
+    "  }",
+    "  window.navigate = navigate;",
+    "  document.querySelectorAll('nav a').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); navigate(a.dataset.view); }); });",
+    "  fetch('data/model.json')",
+    "    .then(function(r) { return r.json(); })",
+    "    .then(function(data) { model = data; navigate('dashboard'); })",
+    "    .catch(function(err) { document.getElementById('main').innerHTML = '<p style=\"color:red\">Failed to load model.json: ' + escHtml(String(err)) + '</p>'; });",
+    "  if (location.protocol !== 'file:') {",
+    "    try { new EventSource('/__livereload').onmessage = function () { location.reload(); }; } catch (e) {}",
+    "  }",
+    "})();"
+  ];
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * The SINGLE source of truth for the browser Markdown renderer.
+ *
+ * Returns the JS source lines that declare `escHtml`, `renderMarkdown`, and
+ * `renderInline` as plain function declarations (no wrapping, no trailing
+ * `return`). Both the shipped browser bundle (buildSiteJs) and the unit-test
+ * harness (buildRendererJs) consume THIS, so the renderer exists exactly once
+ * and a fix to it reaches the shipped site.js and the tests simultaneously.
+ */
+function rendererSourceLines(): string[] {
+  const tripleBacktick = String.fromCharCode(96, 96, 96);
+  const singleBacktick = String.fromCharCode(96);
+  return [
+    "function escHtml(str) {",
+    "  return String(str)",
+    "    .replace(/&/g, '&amp;')",
+    "    .replace(/</g, '&lt;')",
+    "    .replace(/>/g, '&gt;')",
+    "    .replace(/\"/g, '&quot;')",
+    "    .replace(/'/g, '&#39;');",
+    "}",
+    "function renderMarkdown(src) {",
+    "  var lines = String(src).split(/\\r?\\n/);",
+    "  var out = [];",
+    "  var inCode = false;",
+    "  var codeLang = '';",
+    "  var codeLines = [];",
+    "  var inUl = false;",
+    "  var inOl = false;",
+    "  function flushUl() { if (inUl) { out.push('</ul>'); inUl = false; } }",
+    "  function flushOl() { if (inOl) { out.push('</ol>'); inOl = false; } }",
+    "  function flushList() { flushUl(); flushOl(); }",
+    "  var FENCE = " + JSON.stringify(tripleBacktick) + ";",
+    "  for (var i = 0; i < lines.length; i++) {",
+    "    var line = lines[i];",
+    "    if (!inCode && line.slice(0,3) === FENCE) {",
+    "      flushList(); inCode = true; codeLang = escHtml(line.slice(3).trim()); codeLines = []; continue;",
+    "    }",
+    "    if (inCode) {",
+    "      if (line.slice(0,3) === FENCE) {",
+    "        out.push('<pre><code' + (codeLang ? ' class=\"lang-' + codeLang + '\"' : '') + '>' + codeLines.map(function(l){ return escHtml(l); }).join('\\n') + '</code></pre>');",
+    "        inCode = false; codeLines = []; codeLang = '';",
+    "      } else { codeLines.push(line); }",
+    "      continue;",
+    "    }",
+    "    var hMatch = line.match(/^(#{1,6})\\s+(.*)/);",
+    "    if (hMatch) { flushList(); var level = hMatch[1].length; out.push('<h' + level + '>' + escHtml(hMatch[2]) + '</h' + level + '>'); continue; }",
+    "    if (/^[-*]\\s/.test(line)) { flushOl(); if (!inUl) { out.push('<ul>'); inUl = true; } out.push('<li>' + renderInline(line.slice(2)) + '</li>'); continue; }",
+    "    var olMatch = line.match(/^\\d+\\.\\s+(.*)/);",
+    "    if (olMatch) { flushUl(); if (!inOl) { out.push('<ol>'); inOl = true; } out.push('<li>' + renderInline(olMatch[1]) + '</li>'); continue; }",
+    "    if (line.trim() === '') { flushList(); continue; }",
+    "    flushList(); out.push('<p>' + renderInline(line) + '</p>');",
+    "  }",
+    "  flushList();",
+    "  return out.join('\\n');",
+    "}",
+    "function renderInline(text) {",
+    "  var BT = " + JSON.stringify(singleBacktick) + ";",
+    "  var re1 = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');",
+    "  // escHtml is applied to the whole text first; label/href are already HTML-escaped.",
+    "  return escHtml(text)",
+    "    .replace(re1, '<code>$1</code>')",
+    "    .replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_, label, href) {",
+    "      var scheme = href.split(':')[0].toLowerCase();",
+    "      var isSafe = href.charAt(0) === '#' || href.charAt(0) === '/' || href.charAt(0) === '.' ||",
+    "        scheme === 'https' || scheme === 'http' || scheme === 'mailto';",
+    "      // Unsafe scheme: degrade to plain label text (already HTML-escaped)",
+    "      if (!isSafe) { return label; }",
+    "      var safeHref = href.replace(/[^a-zA-Z0-9_.\\-/:?&#=@%+]/g, '');",
+    "      // label is already HTML-escaped from the initial escHtml call",
+    "      return '<a href=\"' + safeHref + '\">' + label + '</a>';",
+    "    });",
+    "}"
+  ];
+}
+
+/**
+ * Returns a JavaScript source string that, when evaluated with `new Function`,
+ * returns an object `{ renderMarkdown, renderInline }`.
+ * Intended for unit-testing the Markdown renderer without a browser.
+ *
+ * Composes the shared rendererSourceLines() and appends the `return` that
+ * exposes the functions to the test harness — so tests exercise the exact same
+ * renderer source that buildSiteJs ships in the browser bundle.
+ *
+ * @example
+ *   const src = buildRendererJs();
+ *   const { renderMarkdown, renderInline } = new Function(src)();
+ */
+export function buildRendererJs(): string {
+  return [
+    ...rendererSourceLines(),
+    "return { renderMarkdown: renderMarkdown, renderInline: renderInline };"
+  ].join("\n");
+}
+
+// Only run the CLI when this module is the entry point, not when imported
+// (e.g. tests importing buildRendererJs must not trigger main()).
+//
+// `npm install -g` / `npm link` install the `acs` bin as a SYMLINK on Unix.
+// path.resolve() does NOT follow symlinks, so process.argv[1] (the symlink
+// path) would never equal the realpath'd module path and main() would never
+// run — the CLI would exit 0 with no output. Resolve argv[1] through
+// fs.realpathSync (this is what the `es-main` package does) so the symlinked
+// bin matches. Fall back to path.resolve if realpathSync throws (e.g. argv[1]
+// missing or not a real path).
+function resolveInvokedPath(argvPath: string | undefined): string {
+  if (!argvPath) return "";
+  try {
+    return realpathSync(argvPath);
+  } catch {
+    return path.resolve(argvPath);
+  }
+}
+const invokedPath = resolveInvokedPath(process.argv[1]);
+const modulePath = fileURLToPath(import.meta.url);
+if (invokedPath && (invokedPath === modulePath || invokedPath === modulePath.replace(/\.js$/, ""))) {
+  main(process.argv.slice(2)).catch((error: unknown) => {
+    console.error(`ERROR ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

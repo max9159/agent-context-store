@@ -12,6 +12,7 @@ import {
   validatePolicyScope,
   createHandoff,
   checkHandoff,
+  approveHandoff,
   buildContextPackage,
   buildIndex,
   doctor,
@@ -20,7 +21,13 @@ import {
   listRoles,
   explainRole,
   getNextActions,
-  type ArtifactType
+  getTasksOverview,
+  readTaskLog,
+  buildSiteModel,
+  deriveKanbanState,
+  computeNextRole,
+  type ArtifactType,
+  type SiteTask
 } from "../packages/core/dist/index.js";
 
 // ─── initContextStore — Mode 1 (in-repo, default) ────────────────────────────
@@ -737,5 +744,492 @@ describe("dedicated mode — artifact round-trip", () => {
   test("validates dedicated store", async () => {
     const result = await validateContextStore(dir);
     assert.equal(result.valid, true, `Errors: ${result.errors.join(", ")}`);
+  });
+});
+
+// ─── buildSiteModel ───────────────────────────────────────────────────────────
+
+describe("buildSiteModel", () => {
+  let dir: string;
+
+  before(async () => {
+    dir = makeTempDir("acs-core-site-");
+    await initContextStore({ rootDir: dir });
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "SITE-001", title: "Site SRS" });
+    await createArtifact({ rootDir: dir, type: "sdd", taskId: "SITE-001", title: "Site SDD" });
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "SITE-002", title: "Second Task SRS" });
+  });
+
+  after(() => cleanupTempDir(dir));
+
+  test("returns a SiteModel with required top-level keys", async () => {
+    const model = await buildSiteModel(dir);
+    assert.ok(typeof model.generatedAt === "string", "generatedAt should be a string");
+    assert.ok(typeof model.store === "object" && model.store !== null, "store should be an object");
+    assert.ok(Array.isArray(model.tasks), "tasks should be an array");
+    assert.ok(Array.isArray(model.artifacts), "artifacts should be an array");
+    assert.ok(Array.isArray(model.handoffs), "handoffs should be an array");
+    assert.ok(typeof model.validation === "object" && model.validation !== null, "validation should be an object");
+  });
+
+  test("groups artifacts by frontmatter task_id, not directory name", async () => {
+    const model = await buildSiteModel(dir);
+    const task1 = model.tasks.find((t: SiteTask) => t.taskId === "SITE-001");
+    const task2 = model.tasks.find((t: SiteTask) => t.taskId === "SITE-002");
+    assert.ok(task1, "SITE-001 task should exist");
+    assert.ok(task2, "SITE-002 task should exist");
+    assert.equal(task1!.artifactCount, 2, "SITE-001 should have 2 artifacts");
+    assert.equal(task2!.artifactCount, 1, "SITE-002 should have 1 artifact");
+  });
+
+  test("task includes artifacts, handoffs, timeline, and nextActionsByRole fields", async () => {
+    const model = await buildSiteModel(dir);
+    const task = model.tasks.find((t: SiteTask) => t.taskId === "SITE-001");
+    assert.ok(task, "SITE-001 should exist");
+    assert.ok(Array.isArray(task!.artifacts), "task.artifacts should be an array");
+    assert.ok(Array.isArray(task!.handoffs), "task.handoffs should be an array");
+    assert.ok(Array.isArray(task!.timeline), "task.timeline should be an array");
+    assert.ok(typeof task!.nextActionsByRole === "object", "task.nextActionsByRole should be an object");
+    assert.ok(typeof task!.kanbanState === "string", "task.kanbanState should be a string");
+  });
+
+  test("model artifacts list uses frontmatter task_id as source of truth", async () => {
+    const model = await buildSiteModel(dir);
+    for (const artifact of model.artifacts) {
+      assert.ok(typeof artifact.taskId === "string", "artifact.taskId should be a string");
+      assert.ok(artifact.taskId.length > 0, "artifact.taskId should not be empty");
+    }
+    const site001Artifacts = model.artifacts.filter((a: { taskId: string }) => a.taskId === "SITE-001");
+    assert.equal(site001Artifacts.length, 2);
+  });
+
+  test("taskFilter limits results to the specified task", async () => {
+    const model = await buildSiteModel(dir, "SITE-001");
+    const taskIds = model.tasks.map((t: SiteTask) => t.taskId);
+    assert.ok(taskIds.includes("SITE-001"), "filtered model should include SITE-001");
+    assert.ok(!taskIds.includes("SITE-002"), "filtered model should not include SITE-002");
+    const artifactTaskIds = new Set(model.artifacts.map((a: { taskId: string }) => a.taskId));
+    assert.ok(!artifactTaskIds.has("SITE-002"), "filtered artifacts should not include SITE-002");
+  });
+
+  test("store field reflects resolved store info", async () => {
+    const model = await buildSiteModel(dir);
+    assert.ok(typeof model.store.storeDir === "string", "store.storeDir should be a string");
+    assert.ok(typeof model.store.mode === "string", "store.mode should be a string");
+  });
+
+  test("validation result is included in model", async () => {
+    const model = await buildSiteModel(dir);
+    assert.ok(typeof model.validation.valid === "boolean", "validation.valid should be a boolean");
+    assert.ok(Array.isArray(model.validation.errors), "validation.errors should be an array");
+    assert.ok(Array.isArray(model.validation.warnings), "validation.warnings should be an array");
+  });
+
+  test("reviewStatus and pendingToRole reflect frontier pending handoff by pipeline role order", async () => {
+    // Isolated store so handoffs don't bleed into other tests
+    const hDir = makeTempDir("acs-core-site-review-");
+    try {
+      await initContextStore({ rootDir: hDir });
+      // Create BA artifact (srs) and SA artifact (sdd) so both roles have artifacts
+      await createArtifact({ rootDir: hDir, type: "srs", taskId: "SITE-HOF", title: "SITE-HOF SRS" });
+      await createArtifact({ rootDir: hDir, type: "sdd", taskId: "SITE-HOF", title: "SITE-HOF SDD" });
+      // Create a DEV artifact so the task sits in the DEV column
+      await createArtifact({ rootDir: hDir, type: "implementation-note", taskId: "SITE-HOF", title: "SITE-HOF Impl" });
+      // Handoff 1: BA→SA, approved — should NOT affect reviewStatus
+      const h1 = await createHandoff({ rootDir: hDir, fromRole: "ba", toRole: "sa", taskId: "SITE-HOF" });
+      await approveHandoff({ rootDir: hDir, handoffRef: h1.handoffId });
+      // Handoff 2: SA→DEV, pending (default) — lower pipeline frontier than DEV→QA
+      await createHandoff({ rootDir: hDir, fromRole: "sa", toRole: "dev", taskId: "SITE-HOF", mode: "relaxed" });
+      // Handoff 3: DEV→QA, pending — highest pipeline frontier (toRole = "qa", index 3)
+      await createHandoff({ rootDir: hDir, fromRole: "dev", toRole: "qa", taskId: "SITE-HOF", mode: "relaxed" });
+
+      const model = await buildSiteModel(hDir, "SITE-HOF");
+      const task = model.tasks.find((t: SiteTask) => t.taskId === "SITE-HOF");
+      assert.ok(task, "SITE-HOF task should exist");
+      // Task has DEV artifact so kanbanState should be DEV (not Review — Review column no longer exists)
+      assert.equal(task!.kanbanState, "DEV", "task should remain in DEV column, not a Review column");
+      // reviewStatus must be pending because there are pending handoffs
+      assert.equal(task!.reviewStatus, "pending", "reviewStatus should be pending");
+      // pendingToRole must be the furthest-along frontier: toRole "QA" (pipeline index 3) beats "DEV" (index 2)
+      // The YAML stores roles in uppercase (e.g. "QA"), so pendingToRole reflects that casing
+      assert.equal(task!.pendingToRole?.toUpperCase(), "QA", "pendingToRole should be the highest pipeline-order pending toRole");
+    } finally {
+      cleanupTempDir(hDir);
+    }
+  });
+});
+
+// ─── deriveKanbanState ────────────────────────────────────────────────────────
+
+describe("deriveKanbanState", () => {
+  test("returns Entry when no roles have artifacts", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: [], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "Entry");
+  });
+
+  test("returns BA when only BA has artifacts and no errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "BA");
+  });
+
+  test("returns SA when SA has artifacts", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "SA");
+  });
+
+  test("returns DEV when dev has artifacts", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "DEV");
+  });
+
+  test("returns QA when qa has artifacts but no approved signoff", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "QA");
+  });
+
+  test("returns Done when qa has artifacts and has approved signoff and no errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: true });
+    assert.equal(state, "Done");
+  });
+
+  test("Blocked takes precedence over role-stage state when errors exist", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: ["Missing required artifact"], hasApprovedQaSignoff: false });
+    assert.equal(state, "Blocked");
+  });
+
+  test("Done requires no validation errors even with approved signoff", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: ["Some error"], hasApprovedQaSignoff: true });
+    assert.equal(state, "Blocked");
+  });
+
+  test("returns Entry when rolesWithArtifacts is empty even with errors", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: [], validationErrors: ["Store missing dir"], hasApprovedQaSignoff: false });
+    assert.equal(state, "Blocked");
+  });
+
+  test("a pending handoff no longer changes the stage (surfaced as a card badge instead)", () => {
+    // Previously this returned "Review"; now the task stays in its role column.
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa"], validationErrors: [], hasApprovedQaSignoff: false });
+    assert.equal(state, "SA");
+  });
+
+  test("Blocked still takes precedence regardless of handoff status", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba"], validationErrors: ["Some error"], hasApprovedQaSignoff: false });
+    assert.equal(state, "Blocked");
+  });
+
+  test("Done still takes precedence regardless of handoff status", () => {
+    const state = deriveKanbanState({ rolesWithArtifacts: ["ba", "sa", "dev", "qa"], validationErrors: [], hasApprovedQaSignoff: true });
+    assert.equal(state, "Done");
+  });
+});
+
+// ─── computeNextRole ──────────────────────────────────────────────────────────
+
+// Default workflow stages (mirrors defaultPolicy.workflow.stages in core):
+// [ba, sa, dev, qa, sa]
+const DEFAULT_STAGES = [
+  { owner: "ba" },
+  { owner: "sa" },
+  { owner: "dev" },
+  { owner: "qa" },
+  { owner: "sa" }
+];
+
+describe("computeNextRole", () => {
+  test("empty ownerSet returns any with isEntry=true", () => {
+    const result = computeNextRole(new Set(), DEFAULT_STAGES);
+    assert.deepEqual(result, { suggestedNextRole: "any", isEntry: true });
+  });
+
+  test("{ba} -> sa (first stage without artifacts)", () => {
+    const result = computeNextRole(new Set(["ba"]), DEFAULT_STAGES);
+    assert.equal(result.suggestedNextRole, "sa");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("{ba, sa, dev} -> qa", () => {
+    const result = computeNextRole(new Set(["ba", "sa", "dev"]), DEFAULT_STAGES);
+    assert.equal(result.suggestedNextRole, "qa");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("Bug 1 regression: {ba, sa} -> dev (not sa)", () => {
+    // Old algorithm returned sa (last owner's stage idx=4 is tail, no next stage -> same owner sa).
+    // Correct answer: dev (first stage whose owner is not in ownerSet).
+    const result = computeNextRole(new Set(["ba", "sa"]), DEFAULT_STAGES);
+    assert.equal(result.suggestedNextRole, "dev");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("{ba, sa, dev, qa} -> tail sa (all stages have owners)", () => {
+    // All stages: ba(0), sa(1), dev(2), qa(3), sa(4). sa is in set so idx4 also matches.
+    // All stages covered -> returns tail owner sa.
+    const result = computeNextRole(new Set(["ba", "sa", "dev", "qa"]), DEFAULT_STAGES);
+    assert.equal(result.suggestedNextRole, "sa");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("empty stages returns ba as fallback", () => {
+    const result = computeNextRole(new Set(["ba"]), []);
+    assert.equal(result.suggestedNextRole, "ba");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("F4 regression: mid-stream entry {sa} -> dev, not backwards to ba", () => {
+    // Relaxed mode allows entering at SA with no BA artifacts. The suggestion
+    // must continue FORWARD from sa, never suggest the deliberately-skipped
+    // upstream ba stage.
+    const result = computeNextRole(new Set(["sa"]), DEFAULT_STAGES);
+    assert.equal(result.suggestedNextRole, "dev");
+    assert.equal(result.isEntry, false);
+  });
+
+  test("F4 regression: custom workflow without duplicated tail owner — {sa} -> dev", () => {
+    const CUSTOM_STAGES = [
+      { owner: "ba" },
+      { owner: "sa" },
+      { owner: "dev" },
+      { owner: "qa" }
+    ];
+    const result = computeNextRole(new Set(["sa"]), CUSTOM_STAGES);
+    assert.equal(result.suggestedNextRole, "dev");
+    assert.equal(result.isEntry, false);
+  });
+});
+
+// ─── getTasksOverview — Bug 1 end-to-end regression ──────────────────────────
+
+describe("getTasksOverview — suggestedNextRole regression", () => {
+  let dir: string;
+
+  before(async () => {
+    dir = makeTempDir("acs-core-overview-");
+    await initContextStore({ rootDir: dir });
+    // Create ba artifact (srs) and sa artifact (sdd) for same task
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "OV-001", title: "Overview SRS" });
+    await createArtifact({ rootDir: dir, type: "sdd", taskId: "OV-001", title: "Overview SDD" });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("with ba+sa artifacts, suggestedNextRole is dev (Bug 1 regression)", async () => {
+    const overview = await getTasksOverview(dir);
+    const task = overview.find((t) => t.taskId === "OV-001");
+    assert.ok(task, "OV-001 task should be present in overview");
+    // owners = {ba, sa} — old buggy code returned "sa", correct code returns "dev"
+    assert.equal(task!.suggestedNextRole, "dev", `Expected dev but got ${task!.suggestedNextRole}`);
+    assert.equal(task!.isEntry, false);
+  });
+});
+
+// ─── buildSiteModel — Bug 1 end-to-end regression ────────────────────────────
+
+describe("buildSiteModel — suggestedNextRole regression", () => {
+  let dir: string;
+
+  before(async () => {
+    dir = makeTempDir("acs-core-site-bug1-");
+    await initContextStore({ rootDir: dir });
+    // Create ba artifact (srs) and sa artifact (sdd) for same task
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "SB-001", title: "Site Bug1 SRS" });
+    await createArtifact({ rootDir: dir, type: "sdd", taskId: "SB-001", title: "Site Bug1 SDD" });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("with ba+sa artifacts, siteTask.suggestedNextRole is dev (Bug 1 regression)", async () => {
+    const model = await buildSiteModel(dir);
+    const task = model.tasks.find((t: SiteTask) => t.taskId === "SB-001");
+    assert.ok(task, "SB-001 task should be present in site model");
+    // owners = {ba, sa} — old buggy code returned "sa", correct code returns "dev"
+    assert.equal(task!.suggestedNextRole, "dev", `Expected dev but got ${task!.suggestedNextRole}`);
+  });
+});
+
+// ─── approveHandoff ───────────────────────────────────────────────────────────
+
+describe("approveHandoff", () => {
+  let dir: string;
+
+  before(async () => {
+    dir = makeTempDir("acs-core-approve-");
+    await initContextStore({ rootDir: dir });
+    // Create an artifact so the handoff passes strict validation (ba->sa requires srs)
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "APPR-001", title: "SRS for Approve" });
+  });
+  after(() => cleanupTempDir(dir));
+
+  test("create then approve (strict) sets approval_status and status to approved", async () => {
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-001" });
+    const result = await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewedAt: "2026-06-03T00:00:00.000Z" });
+    assert.equal(result.approvalStatus, "approved");
+    assert.ok(result.updated.length > 0, "updated should be non-empty");
+    const content = await readText(join(dir, hresult.handoffPath));
+    assert.ok(content.includes("approval_status: approved"), `YAML should contain approval_status: approved\n${content}`);
+    assert.ok(content.includes("status: approved"), `YAML should contain status: approved\n${content}`);
+    assert.ok(content.includes("reviewed_at: 2026-06-03T00:00:00.000Z"), `YAML should contain reviewed_at\n${content}`);
+  });
+
+  test("locate by --from/--to/--task succeeds", async () => {
+    // Create artifact BEFORE handoff so artifact path is included in handoff YAML
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "APPR-002", title: "SRS 002" });
+    await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-002" });
+    const result = await approveHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-002" });
+    assert.equal(result.approvalStatus, "approved");
+    assert.ok(result.handoffId.includes("APPR-002"));
+  });
+
+  test("already approved handoff is idempotent no-op (finding 8)", async () => {
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "APPR-003", title: "SRS 003" });
+    await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-003" });
+    // First approve
+    await approveHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-003" });
+    // Second approve should be no-op
+    const second = await approveHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-003" });
+    assert.equal(second.updated.length, 0, "no-op should have empty updated");
+    assert.ok(second.warnings.some((w) => w.includes("already approved")), `Expected warning about already approved, got: ${JSON.stringify(second.warnings)}`);
+  });
+
+  test("finding 8: already approved handoff with deleted artifact is not blocked by strict validation", async () => {
+    // Step 1: Create artifact first so handoff YAML embeds the artifact path
+    const artResult = await createArtifact({ rootDir: dir, type: "srs", taskId: "APPR-008", title: "SRS 008" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-008" });
+    // Step 2: Approve once in strict mode — artifact exists so validation passes, approval_status becomes "approved"
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, mode: "strict" });
+    // Step 3: Delete the referenced artifact from disk so strict validation WOULD now fail if it ran
+    await unlink(join(dir, artResult.artifactPath));
+    // Step 3a: Assert that a fresh checkHandoff on this handoff now reports invalid (proves artifact deletion
+    // actually breaks file-layer validation — i.e. strict validation WOULD fail if it ran again)
+    const postDeleteCheck = await checkHandoff(dir, hresult.handoffId);
+    assert.equal(postDeleteCheck.valid, false, "checkHandoff should report invalid after artifact deletion");
+    assert.ok(
+      postDeleteCheck.errors.some((e) => e.includes("does not exist")),
+      `Expected 'does not exist' error, got: ${JSON.stringify(postDeleteCheck.errors)}`
+    );
+    // Step 4: Re-approve in strict mode — idempotent short-circuit fires BEFORE strict validation,
+    // so the missing artifact must NOT cause a throw
+    const reapprove = await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, mode: "strict" });
+    assert.equal(reapprove.updated.length, 0, "idempotent re-approve should not update anything");
+    assert.ok(reapprove.warnings.some((w) => w.includes("already approved")));
+  });
+
+  test("non-existent handoff throws", async () => {
+    await assert.rejects(
+      () => approveHandoff({ rootDir: dir, handoffRef: "HOFF-NONEXISTENT-99-BA-SA" }),
+      /Handoff not found/
+    );
+  });
+
+  test("audit: readTaskLog contains handoff.approve event (finding 2)", async () => {
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId: "APPR-004", title: "SRS 004" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId: "APPR-004" });
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewedAt: "2026-06-03T12:00:00.000Z" });
+    // task_id must come from YAML when locating by handoffRef
+    const log = await readTaskLog({ rootDir: dir, taskId: "APPR-004" });
+    const approveEvent = log.find((e) => e.action === "handoff.approve");
+    assert.ok(approveEvent, `Expected handoff.approve event in task log, got: ${JSON.stringify(log)}`);
+  });
+
+  test("finding B: YAML reviewed_at, audit ts, and audit reviewed_at are all equal (timestamp consistency)", async () => {
+    const taskId = "APPR-005";
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId, title: "SRS 005" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId });
+    const fixedTs = "2026-06-03T09:00:00.000Z";
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewedAt: fixedTs });
+    // Check YAML
+    const content = await readText(join(dir, hresult.handoffPath));
+    assert.ok(content.includes(`reviewed_at: ${fixedTs}`), `YAML should contain fixed reviewed_at\n${content}`);
+    // Check audit log
+    const log = await readTaskLog({ rootDir: dir, taskId });
+    const approveEvent = log.find((e) => e.action === "handoff.approve");
+    assert.ok(approveEvent, "Expected handoff.approve event");
+    assert.equal(approveEvent!.ts, fixedTs, `audit ts should equal injected reviewedAt, got: ${approveEvent!.ts}`);
+    assert.equal(approveEvent!["reviewed_at"], fixedTs, `audit reviewed_at should equal injected reviewedAt, got: ${approveEvent!["reviewed_at"]}`);
+  });
+
+  test("strict mode rejects handoff referencing missing artifact (finding 1)", async () => {
+    // Create a handoff that references a non-existent artifact by directly constructing it
+    const taskId = "APPR-STRICT";
+    // Create handoff without creating the required artifact — strict should reject
+    await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId, mode: "relaxed" });
+    await assert.rejects(
+      () => approveHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId, mode: "strict" }),
+      /validation failed/i
+    );
+  });
+
+  test("relaxed mode allows approval with validation warnings", async () => {
+    const taskId = "APPR-RELAX";
+    await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId, mode: "relaxed" });
+    // No artifact — strict would reject, relaxed should approve
+    const result = await approveHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId, mode: "relaxed" });
+    assert.equal(result.approvalStatus, "approved");
+  });
+
+  test("reviewer is written to YAML when provided", async () => {
+    const taskId = "APPR-REVIEWER";
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId, title: "SRS reviewer" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId });
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewer: "alice" });
+    const content = await readText(join(dir, hresult.handoffPath));
+    assert.ok(content.includes("reviewer: alice"), `YAML should contain reviewer: alice\n${content}`);
+  });
+
+  test("reviewer is NOT written to YAML when absent", async () => {
+    const taskId = "APPR-NOREV";
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId, title: "SRS no-reviewer" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId });
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId });
+    const content = await readText(join(dir, hresult.handoffPath));
+    assert.ok(!content.includes("reviewer:"), `YAML should NOT contain reviewer line when not provided\n${content}`);
+  });
+
+  test("setYamlScalarLine does not touch nested keys like readiness.dor_status", async () => {
+    const taskId = "APPR-NESTED";
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId, title: "SRS nested" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId });
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId });
+    const content = await readText(join(dir, hresult.handoffPath));
+    // readiness.dor_status should remain "pending" (not "approved")
+    assert.ok(content.includes("dor_status: pending"), `readiness.dor_status should remain pending\n${content}`);
+  });
+
+  test("reviewer with $ replacement sequences is written verbatim on re-approval (no $ expansion)", async () => {
+    const taskId = "APPR-DOLLAR";
+    // Create artifact BEFORE handoff so handoff YAML includes artifact path
+    await createArtifact({ rootDir: dir, type: "srs", taskId, title: "SRS dollar" });
+    const hresult = await createHandoff({ rootDir: dir, fromRole: "ba", toRole: "sa", taskId });
+    const handoffFile = join(dir, hresult.handoffPath);
+
+    // First approval writes the reviewer line via the append branch.
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewer: "oldTeam" });
+
+    // Reset approval_status back to pending so a second approval proceeds instead of
+    // short-circuiting. This leaves a pre-existing top-level `reviewer:` line, forcing
+    // setYamlScalarLine down the String.replace branch on re-approval.
+    const reset = (await readText(handoffFile)).replace(/^approval_status:.*$/m, "approval_status: pending");
+    await writeFile(handoffFile, reset, "utf8");
+
+    // Re-approve with a reviewer containing regex-replacement metacharacters. These must
+    // be persisted literally, not expanded ($& -> whole match, $$ -> $, $1 -> capture group).
+    const reviewer = "Ops$&Team$$End$1";
+    await approveHandoff({ rootDir: dir, handoffRef: hresult.handoffId, reviewer });
+
+    const content = await readText(handoffFile);
+    assert.ok(
+      content.includes(`reviewer: ${reviewer}`),
+      `YAML should contain the reviewer value verbatim (no $ expansion)\n${content}`
+    );
+    // Guard against the specific corruption: the whole-match expansion would inject the
+    // matched "reviewer:" text back into the value.
+    assert.ok(
+      !content.includes("reviewer: Opsreviewer:"),
+      `reviewer value must not contain expanded $& match\n${content}`
+    );
   });
 });
